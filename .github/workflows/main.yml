@@ -1,8 +1,8 @@
-name: Testar Conexao Tray
+name: Gerar Token Tray
 on: [workflow_dispatch]
 
 jobs:
-  testar:
+  gerar_token:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -12,7 +12,9 @@ jobs:
           python-version: '3.9'
       - name: Instalar Biblioteca
         run: pip install requests
-      - name: Executar
+      - name: Executar Script
         env:
-          ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
+          CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
+          CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
+          CODE_TRAY: ${{ secrets.CODE_TRAY }}
         run: python teste_conexao.py
