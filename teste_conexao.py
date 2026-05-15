@@ -1,0 +1,18 @@
+name: Testar Conexao Tray
+on: [workflow_dispatch] # Isso permite que você aperte um botão para rodar
+
+jobs:
+  testar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Instalar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Instalar Biblioteca de Acesso
+        run: pip install requests
+      - name: Executar o Teste
+        env:
+          ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
+        run: python teste_conexao.py
