@@ -1,29 +1,22 @@
 import requests
 import os
 
-# Dados que você guardou nos Secrets
-consumer_key = os.getenv('CONSUMER_KEY')
-consumer_secret = os.getenv('CONSUMER_SECRET')
-code = os.getenv('CODE_TRAY')
-url_base = "https://391250.commercesuite.com.br/web_api/auth"
-
 def gerar_token():
-    print("Tentando gerar o Access Token oficial...")
+    url = "https://391250.commercesuite.com.br/web_api/auth"
+    
+    # Pegando os dados do seu "cofre" no GitHub
     payload = {
-        "consumer_key": consumer_key,
-        "consumer_secret": consumer_secret,
-        "code": code
+        "consumer_key": os.getenv('CONSUMER_KEY').strip(),
+        "consumer_secret": os.getenv('CONSUMER_SECRET').strip(),
+        "code": os.getenv('CODE_TRAY').strip()
     }
     
-    resposta = requests.post(url_base, data=payload)
+    print(f"Tentando conexão com a loja 391250...")
+    # O segredo pode estar aqui: enviando exatamente como a Tray pede
+    resposta = requests.post(url, data=payload)
     
-    if resposta.status_code == 201 or resposta.status_code == 200:
-        dados = resposta.json()
-        print("✅ SUCESSO! Token gerado.")
-        print(f"Seu novo Access Token é: {dados.get('access_token')}")
-    else:
-        print(f"❌ Erro: {resposta.status_code}")
-        print(resposta.text)
+    print(f"Resposta da Tray: {resposta.status_code}")
+    print(resposta.text)
 
 if __name__ == "__main__":
     gerar_token()
