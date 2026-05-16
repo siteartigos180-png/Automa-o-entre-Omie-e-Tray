@@ -17,5 +17,6 @@ jobs:
           CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
           CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
           CODE_TRAY: ${{ secrets.CODE_TRAY }}
+          REFRESH_TOKEN_TRAY: ${{ secrets.REFRESH_TOKEN_TRAY }}
           ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
         run: python lista_produtos.py
