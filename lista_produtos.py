@@ -1,43 +1,55 @@
 import requests
 import os
 
-def gerar_e_listar():
-    # URL de autorização oficial usando o subdomínio da sua loja real
-    url_auth = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/auth"
+def listar_produtos_oficiais():
+    # URL oficial de consulta de produtos da sua fábrica
+    url_produtos = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/products"
     
-    payload_auth = {
-        "consumer_key": os.getenv('CONSUMER_KEY').strip(),
-        "consumer_secret": os.getenv('CONSUMER_SECRET').strip(),
-        "code": os.getenv('CODE_TRAY').strip()
+    # Pegando as chaves direto do cofre do GitHub
+    consumer_key = os.getenv('CONSUMER_KEY').strip()
+    consumer_secret = os.getenv('CONSUMER_SECRET').strip()
+    
+    # Parâmetros de autenticação direta aceitos pela Tray para apps integrados
+    params = {
+        "consumer_key": consumer_key,
+        "consumer_secret": consumer_secret
     }
     
-    print("🔑 Passo 1: Solicitando um novo Access Token para a Loja Oficial da Tray...")
-    resposta_auth = requests.post(url_auth, data=payload_auth)
+    print("📦 Consultando a lista de produtos diretamente na Loja Oficial da Tray...")
+    resposta = requests.get(url_produtos, params=params)
     
-    if resposta_auth.status_code in [200, 201]:
-        dados_auth = resposta_auth.json()
-        token_atualizado = dados_auth.get('access_token')
-        print("✅ Token da loja oficial gerado com sucesso!")
+    if resposta.status_code == 200:
+        dados_prod = resposta.json()
+        # A API pode retornar na raiz ou dentro de 'Products'
+        produtos = dados_prod.get('Products', [])
         
-        # URL de consulta de produtos oficial
-        url_produtos = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/products"
-        print("📦 Passo 2: Consultando a lista de produtos reais da fábrica...")
-        resposta_prod = requests.get(url_produtos, params={'access_token': token_atualizado})
-        
-        if resposta_prod.status_code == 200:
-            dados_prod = resposta_prod.json()
-            produtos = dados_prod.get('Products', [])
-            print(f"🎉 SUCESSO! Encontramos {len(produtos)} produtos cadastrados na Loja Oficial:")
+        if produtos:
+            print(f"🎉 SUCESSO! Conexão estabelecida. Encontramos {len(produtos)} produtos:")
             print("-" * 60)
             for p in produtos:
-                prod = p.get('Product')
+                prod = p.get('Product', p)
                 print(f"ID: {prod.get('id')} | Nome: {prod.get('name')} | Estoque: {prod.get('stock')}")
         else:
-            print(f"❌ Erro ao listar produtos oficiais: {resposta_prod.status_code}")
-            print(resposta_prod.text)
+            print("✅ Conexão bem-sucedida, mas nenhum produto foi retornado no catálogo ainda.")
+            print(f"Resposta completa da Tray: {dados_prod}")
+            
+    elif resposta.status_code == 401:
+        print("❌ Erro 401: Não autorizado. Vamos tentar o método alternativo por Headers...")
+        headers = {
+            "Consumer-Key": consumer_key,
+            "Consumer-Secret": consumer_secret
+        }
+        resposta_headers = requests.get(url_produtos, headers=headers)
+        if resposta_headers.status_code == 200:
+            print("🎉 SUCESSO via Headers!")
+            print(resposta_headers.json())
+        else:
+            print(f"❌ Falha em ambos os métodos de autenticação direta. Status: {resposta_headers.status_code}")
+            print(resposta_headers.text)
+            
     else:
-        print(f"❌ Erro na autorização oficial (Passo 1): {resposta_auth.status_code}")
-        print(resposta_auth.text)
+        print(f"❌ Erro na requisição: {resposta.status_code}")
+        print(resposta.text)
 
 if __name__ == "__main__":
-    gerar_e_listar()
+    listar_produtos_oficiais()
