@@ -1,55 +1,56 @@
 import requests
 import os
+import time
 
-def listar_produtos_oficiais():
-    # URL oficial de consulta de produtos da sua fábrica
-    url_produtos = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/products"
+def listar_todo_o_catalogo_tray():
+    url_base = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/products"
     
-    # Pegando as chaves direto do cofre do GitHub
-    consumer_key = os.getenv('CONSUMER_KEY').strip()
-    consumer_secret = os.getenv('CONSUMER_SECRET').strip()
+    # Puxando as credenciais do seu cofre do GitHub
+    consumer_key = os.getenv('CONSUMER_KEY', '').strip()
+    consumer_secret = os.getenv('CONSUMER_SECRET', '').strip()
     
-    # Parâmetros de autenticação direta aceitos pela Tray para apps integrados
-    params = {
-        "consumer_key": consumer_key,
-        "consumer_secret": consumer_secret
-    }
+    pagina = 1
+    total_produtos = 0
     
-    print("📦 Consultando a lista de produtos diretamente na Loja Oficial da Tray...")
-    resposta = requests.get(url_produtos, params=params)
+    print("🚀 INICIANDO VARREDURA AUTOMATIZADA DE TODO O CATÁLOGO DA FÁBRICA...")
+    print("-" * 70)
     
-    if resposta.status_code == 200:
-        dados_prod = resposta.json()
-        # A API pode retornar na raiz ou dentro de 'Products'
-        produtos = dados_prod.get('Products', [])
-        
-        if produtos:
-            print(f"🎉 SUCESSO! Conexão estabelecida. Encontramos {len(produtos)} produtos:")
-            print("-" * 60)
-            for p in produtos:
-                prod = p.get('Product', p)
-                print(f"ID: {prod.get('id')} | Nome: {prod.get('name')} | Estoque: {prod.get('stock')}")
-        else:
-            print("✅ Conexão bem-sucedida, mas nenhum produto foi retornado no catálogo ainda.")
-            print(f"Resposta completa da Tray: {dados_prod}")
-            
-    elif resposta.status_code == 401:
-        print("❌ Erro 401: Não autorizado. Vamos tentar o método alternativo por Headers...")
-        headers = {
-            "Consumer-Key": consumer_key,
-            "Consumer-Secret": consumer_secret
+    while True:
+        # Passando a página atual e forçando o limite máximo de 50 por chamada
+        params = {
+            "consumer_key": consumer_key,
+            "consumer_secret": consumer_secret,
+            "page": pagina,
+            "limit": 50
         }
-        resposta_headers = requests.get(url_produtos, headers=headers)
-        if resposta_headers.status_code == 200:
-            print("🎉 SUCESSO via Headers!")
-            print(resposta_headers.json())
-        else:
-            print(f"❌ Falha em ambos os métodos de autenticação direta. Status: {resposta_headers.status_code}")
-            print(resposta_headers.text)
+        
+        print(f"📦 Solicitando dados da Página {pagina} à API da Tray...")
+        resposta = requests.get(url_base, params=params)
+        
+        if resposta.status_code == 200:
+            dados = resposta.json()
+            produtos_pagina = dados.get('Products', [])
             
-    else:
-        print(f"❌ Erro na requisição: {resposta.status_code}")
-        print(resposta.text)
+            # Se a página vier vazia, significa que o robô leu todo o catálogo e terminou
+            if not produtos_pagina:
+                print(f"✨ Sem mais produtos na página {pagina}. Varredura concluída!")
+                break
+                
+            for p in produtos_pagina:
+                prod = p.get('Product', p)
+                print(f"ID: {prod.get('id')} | Nome: {prod.get('name')} | Peso Líq: {prod.get('weight')}g | Estoque: {prod.get('stock')}")
+                total_produtos += 1
+                
+            pagina += 1
+            time.sleep(0.3)  # Pausa de segurança para não travar o servidor da Tray
+        else:
+            print(f"❌ Erro ao ler a página {pagina}. Status: {resposta.status_code}")
+            print(resposta.text)
+            break
+            
+    print("-" * 70)
+    print(f"🎉 INTEGRAÇÃO DE LEITURA FINALIZADA COM SUCESSO!")
+    print(f"📋 Total de produtos localizados e listados na tela: {total_produtos}")
 
 if __name__ == "__main__":
-    listar_produtos_oficiais()
+    listar_todo_o_catalogo_tray()
