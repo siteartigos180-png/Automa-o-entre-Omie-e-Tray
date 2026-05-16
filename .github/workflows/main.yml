@@ -17,4 +17,4 @@ jobs:
           CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
           CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
           CODE_TRAY: ${{ secrets.CODE_TRAY }}
-        run: python teste_conexao.py
+        run: python lista_produtos.py
