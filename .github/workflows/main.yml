@@ -14,8 +14,8 @@ jobs:
         run: pip install requests
       - name: Executar Script
         env:
-          APP_KEY_OMIE: ${{ secrets.APP_KEY_OMIE }}
-          APP_SECRET_OMIE: ${{ secrets.APP_SECRET_OMIE }}
           CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
           CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
-        run: python lista_omie.py
+          CODE_TRAY: ${{ secrets.CODE_TRAY }}
+          ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
+        run: python lista_produtos.py
