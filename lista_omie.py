@@ -1,53 +1,56 @@
 import requests
 import os
-import time
+import json
 
-def listar_todos_produtos_tray():
-    # URL oficial da sua loja
-    url_base = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/products"
+def consultar_detalhes_na_omie():
+    url = "https://app.omie.com.br/api/v1/geral/produtos/"
     
-    consumer_key = os.getenv('CONSUMER_KEY', '').strip()
-    consumer_secret = os.getenv('CONSUMER_SECRET', '').strip()
+    app_key = os.getenv('APP_KEY_OMIE', '').strip()
+    app_secret = os.getenv('APP_SECRET_OMIE', '').strip()
     
-    pagina = 1
-    total_produtos = 0
+    # Payload estruturado exatamente como os métodos da documentação da Omie exigem
+    payload = {
+        "call": "ListarProdutos",
+        "app_key": app_key,
+        "app_secret": app_secret,
+        "param": [
+            {
+                "pagina": 1,
+                "registros_por_pagina": 10,
+                "apenas_importado_api": "N"
+            }
+        ]
+    }
     
-    print("🚀 Iniciando Varredura Automatizada do Catálogo Oficial da Fábrica...")
-    print("-" * 60)
+    headers = {
+        "Content-Type": "application/json"
+    }
     
-    while True:
-        params = {
-            "consumer_key": consumer_key,
-            "consumer_secret": consumer_secret,
-            "page": pagina,
-            "limit": 50  # Puxa o máximo permitido por página para ir mais rápido
-        }
+    print("🔍 Tentando ler dados estruturados de EAN/SKU direto na API da Omie...")
+    
+    resposta = requests.post(url, data=json.dumps(payload), headers=headers)
+    
+    if respost_code := resposta.status_code == 200:
+        dados = resposta.json()
+        produtos = dados.get('produto_servico_cadastro', [])
         
-        print(f"📦 Lendo página {pagina}...")
-        resposta = requests.get(url_base, params=params)
-        
-        if resposta.status_code == 200:
-            dados = resposta.json()
-            produtos_pagina = dados.get('Products', [])
-            
-            if not produtos_pagina:
-                break  # Se a página vier vazia, significa que chegamos ao fim do catálogo
+        if produtos:
+            print(f"🎉 CONEXÃO ESTABELECIDA COM A DOCUMENTAÇÃO! Dados encontrados:")
+            print("-" * 90)
+            for p in produtos:
+                # Mapeando os nomes exatos das variáveis internas da Omie
+                codigo_fabrica = p.get('codigo_produto')
+                sku_integracao = p.get('codigo_produto_integracao')
+                ean_barras = p.get('codigo_barras')
+                peso_liq = p.get('peso_liquido')
                 
-            for p in produtos_pagina:
-                prod = p.get('Product', p)
-                print(f"ID: {prod.get('id')} | Nome: {prod.get('name')} | Peso Líq: {prod.get('weight')}g | Estoque: {prod.get('stock')}")
-                total_produtos += 1
-            
-            pagina += 1
-            time.sleep(0.5) # Pausa curta de segurança para respeitar o limite da API
+                print(f"ID Omie: {codigo_fabrica} | SKU: {sku_integracao} | EAN: {ean_barras} | Peso: {peso_liq}kg | {p.get('descricao')}")
         else:
-            print(f"❌ Erro ao ler a página {pagina}. Status: {resposta.status_code}")
-            print(resposta.text)
-            break
-            
-    print("-" * 60)
-    print(f"🎉 FIM DA VARREDURA! Automação concluída com sucesso.")
-    print(f"📋 Total de produtos sincronizados e listados na tela: {total_produtos}")
+            print("✅ Conectado à Omie, mas o retorno veio sem itens cadastrados.")
+    else:
+        print(f"❌ Status da Resposta: {resposta.status_code}")
+        print("Retorno do Servidor Omie:")
+        print(resposta.text)
 
 if __name__ == "__main__":
-    listar_todos_produtos_tray()
+    consultar_detalhes_na_omie()
