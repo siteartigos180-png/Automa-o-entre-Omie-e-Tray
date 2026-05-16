@@ -2,21 +2,22 @@ import requests
 import os
 import time
 
-def listar_todo_o_catalogo_tray():
+def listar_catalogo_completo_com_detalhes():
     url_base = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/products"
     
-    # Puxando as credenciais do seu cofre do GitHub
     consumer_key = os.getenv('CONSUMER_KEY', '').strip()
     consumer_secret = os.getenv('CONSUMER_SECRET', '').strip()
     
     pagina = 1
     total_produtos = 0
     
-    print("🚀 INICIANDO VARREDURA AUTOMATIZADA DE TODO O CATÁLOGO DA FÁBRICA...")
-    print("-" * 70)
+    print("🚀 INICIANDO AUDITORIA INTEGRADA: SKU, EAN, PESO BRUTO E LÍQUIDO...")
+    print("-" * 110)
+    # Cabeçalho formatado para leitura organizada das colunas
+    print(f"{'ID':<6} | {'SKU (Ref)':<15} | {'EAN (Barras)':<15} | {'Peso Bruto':<10} | {'Peso Líq':<10} | {'Nome do Produto'}")
+    print("-" * 110)
     
     while True:
-        # Passando a página atual e forçando o limite máximo de 50 por chamada
         params = {
             "consumer_key": consumer_key,
             "consumer_secret": consumer_secret,
@@ -24,33 +25,42 @@ def listar_todo_o_catalogo_tray():
             "limit": 50
         }
         
-        print(f"📦 Solicitando dados da Página {pagina} à API da Tray...")
         resposta = requests.get(url_base, params=params)
         
         if resposta.status_code == 200:
             dados = resposta.json()
             produtos_pagina = dados.get('Products', [])
             
-            # Se a página vier vazia, significa que o robô leu todo o catálogo e terminou
             if not produtos_pagina:
-                print(f"✨ Sem mais produtos na página {pagina}. Varredura concluída!")
                 break
                 
             for p in produtos_pagina:
                 prod = p.get('Product', p)
-                print(f"ID: {prod.get('id')} | Nome: {prod.get('name')} | Peso Líq: {prod.get('weight')}g | Estoque: {prod.get('stock')}")
+                
+                # Coletando os novos campos solicitados
+                sku = prod.get('reference') or prod.get('partner_id') or "Sem SKU"
+                ean = prod.get('ean') or "Sem EAN"
+                
+                # Coletando as variações de peso
+                peso_bruto = prod.get('weight')
+                peso_liquido = prod.get('net_weight')
+                
+                p_bruto = f"{peso_bruto}g" if peso_bruto else "Sem Peso"
+                p_liq = f"{peso_liquido}g" if peso_liquido else "Sem Peso"
+                nome_reduzido = prod.get('name', '')[:40]
+                
+                # Exibe a linha alinhada como uma tabela oficial de conferência
+                print(f"{prod.get('id'):<6} | {sku:<15} | {ean:<15} | {p_bruto:<10} | {p_liq:<10} | {nome_reduzido}")
                 total_produtos += 1
                 
             pagina += 1
-            time.sleep(0.3)  # Pausa de segurança para não travar o servidor da Tray
+            time.sleep(0.2)
         else:
-            print(f"❌ Erro ao ler a página {pagina}. Status: {resposta.status_code}")
-            print(resposta.text)
+            print(f"\n❌ Erro ao ler a página {pagina}. Status: {resposta.status_code}")
             break
             
-    print("-" * 70)
-    print(f"🎉 INTEGRAÇÃO DE LEITURA FINALIZADA COM SUCESSO!")
-    print(f"📋 Total de produtos localizados e listados na tela: {total_produtos}")
+    print("-" * 110)
+    print(f"🎉 FINALIZADO! {total_produtos} produtos auditados com SKU, EAN e Pesos na tela.")
 
 if __name__ == "__main__":
-    listar_todo_o_catalogo_tray()
+    listar_catalogo_completo_com_detalhes()
