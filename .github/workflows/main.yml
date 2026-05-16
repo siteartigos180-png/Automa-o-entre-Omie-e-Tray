@@ -20,4 +20,4 @@ jobs:
           ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
           APP_KEY_OMIE: ${{ secrets.APP_KEY_OMIE }}
           APP_SECRET_OMIE: ${{ secrets.APP_SECRET_OMIE }}
-        run: python lista_omie.py
+       run: python lista_produtos.py
