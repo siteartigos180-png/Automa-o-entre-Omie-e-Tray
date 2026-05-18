@@ -27,7 +27,7 @@ def auditoria_catalogo_completo_tray():
         resposta = requests.get(url_base, params=params)
         
         if resposta.status_code == 200:
-            dados = response_json = resposta.json()
+            dados = resposta.json()
             produtos_pagina = dados.get('Products', [])
             
             if not produtos_pagina:
@@ -36,16 +36,19 @@ def auditoria_catalogo_completo_tray():
             for p in produtos_pagina:
                 prod = p.get('Product', p)
                 
-                # Coletando as variáveis exatas do manual que a Juliana encontrou
-                sku = prod.get('reference') or "Sem SKU"
-                ean = prod.get('ean') or "Sem EAN"
-                peso = prod.get('weight')
+                # Coletando as variáveis da API da Tray
+                sku = prod.get('reference')
+                sku_exibir = sku if sku and str(sku).strip() != "" else "Sem SKU"
                 
-                # Formatando a exibição do peso
-                p_exibir = f"{peso}g" if peso and str(peso) != "0" else "Vazio (0g)"
+                ean = prod.get('ean')
+                ean_exibir = ean if ean and str(ean).strip() != "" else "Sem EAN"
+                
+                peso = prod.get('weight')
+                peso_exibir = f"{peso}g" if peso and str(peso) != "0" else "Vazio (0g)"
+                
                 nome_reduzido = prod.get('name', '')[:45]
                 
-                print(f"{prod.get('id'):<6} | {sku:<15} | {ean:<15} | {p_exibir:<12} | {nome_reduzido}")
+                print(f"{prod.get('id'):<6} | {sku_exibir:<15} | {ean_exibir:<15} | {peso_exibir:<12} | {nome_reduzido}")
                 total_produtos += 1
                 
             pagina += 1
@@ -55,7 +58,7 @@ def auditoria_catalogo_completo_tray():
             break
             
     print("-" * 110)
-    print(f"🎉 AUDITORIA CONCLUÍDA! {total_produtos} produtos verificados com sucesso.")
+    print(f"🎉 AUDITORIA CONCLUÍDA! {total_produtos} produtos verificados.")
 
 if __name__ == "__main__":
     auditoria_catalogo_completo_tray()
