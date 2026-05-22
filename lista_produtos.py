@@ -11,10 +11,10 @@ def auditoria_catalogo_completo_tray():
     pagina = 1
     total_produtos = 0
     
-    print("🚀 INICIANDO CONFERÊNCIA AUTOMATIZADA: ATUALIZAÇÃO OMIE -> TRAY...")
-    print("-" * 110)
-    print(f"{'ID':<6} | {'SKU (Ref)':<15} | {'EAN (Barras)':<15} | {'Peso (Tray)':<12} | {'Nome do Produto'}")
-    print("-" * 110)
+    print("🚀 INICIANDO SUPER AUDITORIA: LOGÍSTICA + ESTOQUE + PREÇO (OMIE <-> TRAY)")
+    print("-" * 135)
+    print(f"{'ID':<6} | {'SKU (Ref)':<15} | {'EAN (Barras)':<15} | {'Peso':<10} | {'Estoque':<8} | {'Preço':<10} | {'Nome do Produto'}")
+    print("-" * 135)
     
     while True:
         params = {
@@ -36,7 +36,7 @@ def auditoria_catalogo_completo_tray():
             for p in produtos_pagina:
                 prod = p.get('Product', p)
                 
-                # Coletando as variáveis da API da Tray
+                # Dados Logísticos
                 sku = prod.get('reference')
                 sku_exibir = sku if sku and str(sku).strip() != "" else "Sem SKU"
                 
@@ -44,11 +44,16 @@ def auditoria_catalogo_completo_tray():
                 ean_exibir = ean if ean and str(ean).strip() != "" else "Sem EAN"
                 
                 peso = prod.get('weight')
-                peso_exibir = f"{peso}g" if peso and str(peso) != "0" else "Vazio (0g)"
+                peso_exibir = f"{peso}g" if peso and str(peso) != "0" else "0g"
                 
-                nome_reduzido = prod.get('name', '')[:45]
+                # Novos Dados Comerciais e de Estoque
+                estoque = prod.get('stock', 0)
+                preco = prod.get('price', 0.0)
+                preco_exibir = f"R$ {float(preco):.2f}"
                 
-                print(f"{prod.get('id'):<6} | {sku_exibir:<15} | {ean_exibir:<15} | {peso_exibir:<12} | {nome_reduzido}")
+                nome_reduzido = prod.get('name', '')[:40]
+                
+                print(f"{prod.get('id'):<6} | {sku_exibir:<15} | {ean_exibir:<15} | {peso_exibir:<10} | {estoque:<8} | {preco_exibir:<10} | {nome_reduzido}")
                 total_produtos += 1
                 
             pagina += 1
@@ -57,8 +62,8 @@ def auditoria_catalogo_completo_tray():
             print(f"\n❌ Erro ao acessar a página {pagina}. Status: {resposta.status_code}")
             break
             
-    print("-" * 110)
-    print(f"🎉 AUDITORIA CONCLUÍDA! {total_produtos} produtos verificados.")
+    print("-" * 135)
+    print(f"🎉 AUDITORIA CONCLUÍDA! {total_produtos} produtos verificados no ecossistema.")
 
 if __name__ == "__main__":
     auditoria_catalogo_completo_tray()
