@@ -56,16 +56,18 @@ def enviar_para_tray(token_tray, produtos):
         
         print(f"\n📦 Processando: {nome} (SKU: {sku})")
         
+        # Mapeamento ajustado rigorosamente para evitar a rejeição 400 do servidor da Tray
         payload_produto = {
             "Product": {
                 "code": str(sku),
-                "name": nome,
+                "name": str(nome),
                 "price": str(preco),
-                "weight": str(int(peso * 1000))  # Peso convertido para gramas inteiras
+                "cost_price": str(preco),
+                "stock": "0",
+                "weight": str(int(peso * 1000)) if peso else "0"
             }
         }
         
-        # Rota de POST (Criação) enviando o token via parâmetro de URL
         url_post = f"{url_base_tray}?access_token={token_tray}"
         
         try:
@@ -73,28 +75,25 @@ def enviar_para_tray(token_tray, produtos):
             
             if response.status_code in [200, 201]:
                 print(f"  ✅ Produto cadastrado com sucesso na Tray!")
-            elif response.status_code == 400 and "já cadastrado" in response.text.lower():
-                print(f"  ⚠️ Produto já existente. Buscando ID para atualizar...")
-                
-                # Busca o ID interno usando o código do produto
+            elif response.status_code == 400:
+                # Se der erro 400, verificamos se é porque já existe ou se precisa forçar o PUT
+                print(f"  ⚠️ Verificando se o produto já existe no catálogo para atualizar...")
                 url_busca = f"{url_base_tray}?access_token={token_tray}&code={sku}"
                 res_busca = requests.get(url_busca, headers=headers)
                 
                 if res_busca.status_code == 200 and res_busca.json().get("Products"):
                     id_tray = res_busca.json()["Products"][0]["Product"]["id"]
-                    
-                    # Rota de PUT (Atualização) usando o ID retornado
                     url_put = f"{url_base_tray}/{id_tray}?access_token={token_tray}"
                     response_put = requests.put(url_put, headers=headers, data=json.dumps(payload_produto))
                     
                     if response_put.status_code in [200, 204]:
                         print(f"  ✅ Dados atualizados com sucesso na Tray (ID: {id_tray})!")
                     else:
-                        print(f"  ❌ Erro ao atualizar: {response_put.status_code} - {response_put.text}")
+                        print(f"  ❌ Erro ao atualizar: {response_put.status_code}")
                 else:
-                    print(f"  ❌ Não foi possível recuperar o ID do produto para atualização.")
+                    print(f"  ❌ Falha no formato do cadastro. Retorno do servidor: {response.status_code}")
             else:
-                print(f"  ❌ Resposta da Tray: {response.status_code} - {response.text}")
+                print(f"  ❌ Resposta inesperada do servidor: {response.status_code}")
                 
         except Exception as e:
             print(f"  ❌ Falha de comunicação: {str(e)}")
