@@ -1,0 +1,29 @@
+name: Sincronizar Produtos Omie para Tray
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Baixar o código do repositório
+      uses: actions/checkout@v3
+
+    - name: Configurar o Python no servidor
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Instalar dependências de internet
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+
+    - name: Executar o Motor de Integração
+      env:
+        APP_KEY_OMIE: ${{ secrets.APP_KEY_OMIE }}
+        APP_SECRET_OMIE: ${{ secrets.APP_SECRET_OMIE }}
+        ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
+      run: python sincroniza_produtos.py
