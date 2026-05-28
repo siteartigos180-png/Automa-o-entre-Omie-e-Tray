@@ -29,7 +29,10 @@ def buscar_produtos_omie():
         dados = response.json()
         produtos = dados.get("produto_servico_cadastro", [])
         print(f"✅ Sucesso! Encontrados {len(produtos)} produtos na Omie.")
-        return os.environ.get("ACCESS_TOKEN_TRAY"), produtos
+        
+        # 🔑 ADICIONADO DIRETO O SEU TOKEN VÁLIDO EXTRAÍDO DO SEU JSON DE SUCESSO:
+        token_direto = "APP_ID-8561-STORE_ID-391250-7b9f9da20e1f93f1f6521d1f702c6ad2c4cc98034c411de2ff99da0ff7be4ea7"
+        return token_direto, produtos
     else:
         print(f"❌ Erro ao buscar na Omie: {response.status_code} - {response.text}")
         return None, []
@@ -62,13 +65,11 @@ def enviar_para_tray(token_tray, produtos):
             if res_busca.status_code == 200:
                 dados_busca = res_busca.json()
                 if dados_busca.get("Products"):
-                    # Produto localizado! Capturamos o ID interno gerado pela Tray
                     id_tray = dados_busca["Products"][0]["Product"]["id"]
                     print(f"  🔍 Produto já existente na Tray com o ID Interno: {id_tray}")
         except Exception as e:
             print(f"  ⚠️ Falha ao verificar existência: {str(e)}")
 
-        # Estrutura padrão de envio (Payload)
         payload_produto = {
             "Product": {
                 "code": sku,
@@ -79,10 +80,9 @@ def enviar_para_tray(token_tray, produtos):
             }
         }
 
-        # 2️⃣ PASSO: Decidir se atualiza pelo ID ou se cria um novo comercialmente
+        # 2️⃣ PASSO: Enviar dados usando o Token Fixo
         try:
             if id_tray:
-                # Se temos o ID interno, atualizamos usando a rota correta do ID
                 url_put = f"{url_base_tray}/{id_tray}?access_token={token_tray}"
                 response = requests.put(url_put, headers=headers, data=json.dumps(payload_produto))
                 if response.status_code in [200, 204]:
@@ -90,7 +90,6 @@ def enviar_para_tray(token_tray, produtos):
                 else:
                     print(f"  ❌ Erro na atualização do ID {id_tray}: {response.status_code}")
             else:
-                # Se não existe, criamos um novo usando o POST tradicional
                 url_post = f"{url_base_tray}?access_token={token_tray}"
                 response = requests.post(url_post, headers=headers, data=json.dumps(payload_produto))
                 if response.status_code in [200, 201]:
@@ -101,7 +100,7 @@ def enviar_para_tray(token_tray, produtos):
         except Exception as e:
             print(f"  ❌ Falha de comunicação no envio: {str(e)}")
             
-        time.sleep(0.6) # Evita estouro de requisições por segundo (Rate Limit)
+        time.sleep(0.6)
 
 if __name__ == "__main__":
     token, lista_de_produtos = buscar_produtos_omie()
