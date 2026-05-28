@@ -1,17 +1,23 @@
+import os
 import requests
 
 def gerar_novo_token():
-    # Endereço confirmado pelo Mateus e pelo seu print
+    # URL de autenticação confirmada
     url = "https://artigos180cosmeticosemoveis.corpsuite.com.br/web_api/auth"
     
-    # O código longo que aparece exatamente no seu print da Tray
+    # Puxando as credenciais das variáveis de ambiente do GitHub
+    consumer_key = os.environ.get("CONSUMER_KEY_TRAY")
+    consumer_secret = os.environ.get("CONSUMER_SECRET_TRAY")
     codigo_instalacao = "efcd9cb9fa9715c2f86f634847192d157571e6b3546ddb0d60abca1390f83140"
     
+    # Montando o payload com os 3 campos obrigatórios que a Tray exigiu
     payload = {
+        "consumer_key": consumer_key,
+        "consumer_secret": consumer_secret,
         "code": codigo_instalacao
     }
     
-    print("🔑 Tentando gerar um novo Access Token com a Tray...")
+    print("🔑 Enviando chaves e código para gerar o novo Access Token...")
     response = requests.post(url, data=payload)
     
     if response.status_code in [200, 201]:
