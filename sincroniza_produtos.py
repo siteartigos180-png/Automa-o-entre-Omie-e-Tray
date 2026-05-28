@@ -39,66 +39,69 @@ def enviar_para_tray(token_tray, produtos):
         print("📭 Nenhum produto para integrar ou Token da Tray ausente.")
         return
         
-    # URL Base oficial extraída do seu bloco de código da Tray
     url_base_tray = "https://391250.commercesuite.com.br/web_api/products"
+    headers = {"Content-Type": "application/json"}
     
-    headers = {
-        "Content-Type": "application/json"
-    }
-    
-    print(f"🔄 Iniciando envio de {len(produtos)} produtos para a Tray...")
+    print(f"🔄 Iniciando verificação e envio de {len(produtos)} produtos para a Tray...")
     
     for item in sorted(produtos, key=lambda x: x.get("codigo_produto", "")):
-        sku = item.get("codigo_produto", "")
-        nome = item.get("descricao", "")
-        preco = item.get("valor_venda", 0)
+        sku = str(item.get("codigo_produto", ""))
+        nome = str(item.get("descricao", ""))
+        preco = str(item.get("valor_venda", 0))
         peso = item.get("peso_liquido", 0)
+        peso_gramas = str(int(peso * 1000)) if peso else "0"
         
-        print(f"\n📦 Processando: {nome} (SKU: {sku})")
+        print(f"\n📦 Analisando: {nome} (SKU: {sku})")
         
-        # Mapeamento ajustado rigorosamente para evitar a rejeição 400 do servidor da Tray
-        payload_produto = {
-            "Product": {
-                "code": str(sku),
-                "name": str(nome),
-                "price": str(preco),
-                "cost_price": str(preco),
-                "stock": "0",
-                "weight": str(int(peso * 1000)) if peso else "0"
-            }
-        }
-        
-        url_post = f"{url_base_tray}?access_token={token_tray}"
+        # 1️⃣ PASSO: Consultar se o SKU já existe na Tray para pegar o ID correto
+        url_busca = f"{url_base_tray}?access_token={token_tray}&code={sku}"
+        id_tray = None
         
         try:
-            response = requests.post(url_post, headers=headers, data=json.dumps(payload_produto))
-            
-            if response.status_code in [200, 201]:
-                print(f"  ✅ Produto cadastrado com sucesso na Tray!")
-            elif response.status_code == 400:
-                # Se der erro 400, verificamos se é porque já existe ou se precisa forçar o PUT
-                print(f"  ⚠️ Verificando se o produto já existe no catálogo para atualizar...")
-                url_busca = f"{url_base_tray}?access_token={token_tray}&code={sku}"
-                res_busca = requests.get(url_busca, headers=headers)
-                
-                if res_busca.status_code == 200 and res_busca.json().get("Products"):
-                    id_tray = res_busca.json()["Products"][0]["Product"]["id"]
-                    url_put = f"{url_base_tray}/{id_tray}?access_token={token_tray}"
-                    response_put = requests.put(url_put, headers=headers, data=json.dumps(payload_produto))
-                    
-                    if response_put.status_code in [200, 204]:
-                        print(f"  ✅ Dados atualizados com sucesso na Tray (ID: {id_tray})!")
-                    else:
-                        print(f"  ❌ Erro ao atualizar: {response_put.status_code}")
-                else:
-                    print(f"  ❌ Falha no formato do cadastro. Retorno do servidor: {response.status_code}")
-            else:
-                print(f"  ❌ Resposta inesperada do servidor: {response.status_code}")
-                
+            res_busca = requests.get(url_busca, headers=headers)
+            if res_busca.status_code == 200:
+                dados_busca = res_busca.json()
+                if dados_busca.get("Products"):
+                    # Produto localizado! Capturamos o ID interno gerado pela Tray
+                    id_tray = dados_busca["Products"][0]["Product"]["id"]
+                    print(f"  🔍 Produto já existente na Tray com o ID Interno: {id_tray}")
         except Exception as e:
-            print(f"  ❌ Falha de comunicação: {str(e)}")
+            print(f"  ⚠️ Falha ao verificar existência: {str(e)}")
+
+        # Estrutura padrão de envio (Payload)
+        payload_produto = {
+            "Product": {
+                "code": sku,
+                "name": nome,
+                "price": preco,
+                "cost_price": preco,
+                "weight": peso_gramas
+            }
+        }
+
+        # 2️⃣ PASSO: Decidir se atualiza pelo ID ou se cria um novo comercialmente
+        try:
+            if id_tray:
+                # Se temos o ID interno, atualizamos usando a rota correta do ID
+                url_put = f"{url_base_tray}/{id_tray}?access_token={token_tray}"
+                response = requests.put(url_put, headers=headers, data=json.dumps(payload_produto))
+                if response.status_code in [200, 204]:
+                    print(f"  ✅ Dados atualizados com sucesso (ID: {id_tray})!")
+                else:
+                    print(f"  ❌ Erro na atualização do ID {id_tray}: {response.status_code}")
+            else:
+                # Se não existe, criamos um novo usando o POST tradicional
+                url_post = f"{url_base_tray}?access_token={token_tray}"
+                response = requests.post(url_post, headers=headers, data=json.dumps(payload_produto))
+                if response.status_code in [200, 201]:
+                    print(f"  ✅ Novo produto cadastrado com sucesso na Tray!")
+                else:
+                    print(f"  ❌ Erro no cadastro do novo produto: {response.status_code}")
+                    
+        except Exception as e:
+            print(f"  ❌ Falha de comunicação no envio: {str(e)}")
             
-        time.sleep(0.5)
+        time.sleep(0.6) # Evita estouro de requisições por segundo (Rate Limit)
 
 if __name__ == "__main__":
     token, lista_de_produtos = buscar_produtos_omie()
