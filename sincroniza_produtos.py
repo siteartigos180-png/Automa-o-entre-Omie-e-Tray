@@ -35,7 +35,7 @@ def buscar_produtos_omie():
         return None, []
 
 def enviar_para_tray(token_tray, produtos):
-    if not token_tray or not whitespaces_produtos := produtos:
+    if not token_tray or not produtos:
         print("📭 Nenhum produto para integrar ou Token da Tray ausente.")
         return
         
