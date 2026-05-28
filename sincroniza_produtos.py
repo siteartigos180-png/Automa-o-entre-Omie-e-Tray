@@ -39,18 +39,17 @@ def enviar_para_tray(token_tray, produtos):
         print("📭 Nenhum produto para integrar ou Token da Tray ausente.")
         return
         
-    # URL da API da Tray Corp para gerenciamento de produtos
-    url_tray = "https://api.traycorp.com.br/v2/products"
+    # Corrigido para o endpoint correto da API global da Tray Commerce
+    url_base_tray = "https://api.tray.com.br/products"
     
+    # Na API padrão da Tray, o token geralmente vai como query param 'access_token' ou no header editado
     headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token_tray}"
+        "Content-Type": "application/json"
     }
     
-    print(f"🔄 Iniciando envio de {len(produtos)} produtos para a Tray Corp...")
+    print(f"🔄 Iniciando envio de {len(produtos)} produtos para a Tray...")
     
     for item in sorted(produtos, key=lambda x: x.get("codigo_produto", "")):
-        # Coleta os dados essenciais da Omie para mapear na Tray
         sku = item.get("codigo_produto", "")
         nome = item.get("descricao", "")
         preco = item.get("valor_venda", 0)
@@ -58,39 +57,39 @@ def enviar_para_tray(token_tray, produtos):
         
         print(f"\n📦 Processando: {nome} (SKU: {sku})")
         
-        # Estrutura o payload padrão que a Tray Corp espera receber
         payload_produto = {
-            "product": {
+            "Product": {
                 "code": str(sku),
                 "name": nome,
-                "price": float(preco),
-                "weight": float(peso)
+                "price": str(preco),
+                "weight": str(int(peso * 1000)) # Tray padrão costuma ler peso em gramas inteiras
             }
         }
         
+        # Injetando o parâmetro de acesso direto na URL da requisição
+        url_envio = f"{url_base_tray}?access_token={token_tray}"
+        
         try:
-            # Tenta enviar o produto para a Tray Corp
-            response = requests.post(url_tray, headers=headers, data=json.dumps(payload_produto))
+            response = requests.post(url_envio, headers=headers, data=json.dumps(payload_produto))
             
             if response.status_code in [200, 201]:
-                print(f"  ✅ Produto integrado com sucesso na Tray Corp!")
-            elif response.status_code == 422:
-                # Se o produto já existir, nós enviamos um comando de atualização (PUT)
-                print(f"  ⚠️ Produto já existente. Atualizando dados na Tray...")
-                url_update = f"{url_tray}/code/{sku}"
+                print(f"  ✅ Produto integrado com sucesso na Tray!")
+            elif response.status_code in [400, 422] or "já existe" in response.text.lower():
+                print(f"  ⚠️ Produto possivelmente já existente. Tentando atualizar dados...")
+                # Rota de atualização na Tray padrão usa o ID ou Code
+                url_update = f"{url_base_tray}/code/{sku}?access_token={token_tray}"
                 response_put = requests.put(url_update, headers=headers, data=json.dumps(payload_produto))
                 if response_put.status_code in [200, 204]:
-                    print(f"  ✅ Dados atualizados com sucesso na Tray Corp!")
+                    print(f"  ✅ Dados atualizados com sucesso na Tray!")
                 else:
-                    print(f"  ❌ Erro ao atualizar na Tray: {response_put.status_code} - {response_put.text}")
+                    print(f"  ❌ Erro ao atualizar: {response_put.status_code} - {response_put.text}")
             else:
                 print(f"  ❌ Erro ao cadastrar na Tray: {response.status_code} - {response.text}")
                 
         except Exception as e:
-            print(f"  ❌ Falha de conexão ao enviar o produto: {str(e)}")
+            print(f"  ❌ Falha de conexão: {str(e)}")
             
-        # Pequena pausa de segurança para respeitar o limite de requisições por segundo da API
-        time.sleep(0.5)
+        time.sleep(0.6)
 
 if __name__ == "__main__":
     token, lista_de_produtos = buscar_produtos_omie()
