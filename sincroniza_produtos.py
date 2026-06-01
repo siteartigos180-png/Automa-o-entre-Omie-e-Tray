@@ -4,38 +4,31 @@ import requests
 import time
 
 def gerar_novo_token_tray():
-    """Gera o Access Token oficial diretamente na nova loja vinculada pelo Mateus"""
+    """Gera o Access Token utilizando os dados diretos da nova loja homologada"""
     url_auth = "https://1501119.commercesuite.com.br/web_api/auth"
     
-    # Puxa as credenciais do seu app que já estão salvas no GitHub
-    consumer_key = os.environ.get("CONSUMER_KEY_TRAY")
-    consumer_secret = os.environ.get("CONSUMER_SECRET_TRAY")
-    
-    # O Code oficial confirmado pelo suporte técnico hoje
-    novo_code = "2a015d6992084e723cc9cd57fbf37790a2c9168b3e93bf526f53167ef62ba82e"
-    
+    # Chaves e credenciais injetadas diretamente para evitar falhas de variáveis vazias
     payload = {
-        "consumer_key": consumer_key,
-        "consumer_secret": consumer_secret,
-        "code": novo_code
+        "consumer_key": "6e336e768ca02df59b3433580a1498fa6e0c704ca910904d99c43552093e0618",
+        "consumer_secret": "2fb170cfa3a677e5d8ecfca275c93ad6b9bd608be04e6e0d9b40fbfdf02f831d",
+        "code": "2a015d6992084e723cc9cd57fbf37790a2c9168b3e93bf526f53167ef62ba82e"
     }
     headers = {"Content-Type": "application/json"}
     
-    print("🔑 Autenticando o aplicativo Artigos180 na nova loja 1501119...")
+    print("🔑 Autenticando o aplicativo diretamente na nova loja 1501119...")
     try:
         response = requests.post(url_auth, headers=headers, data=json.dumps(payload))
         if response.status_code in [200, 201]:
             dados = response.json()
             token_gerado = dados.get("access_token")
-            print("✅ Token de acesso gerado e validado com sucesso!")
+            print("✅ Sucesso! Novo Token de acesso gerado e validado!")
             return token_gerado
         else:
-            print(f"⚠️ Erro ao gerar token via API: {response.status_code} - {response.text}")
-            print("💡 Tentando usar o Token reserva do ambiente...")
-            return os.environ.get("ACCESS_TOKEN_TRAY")
+            print(f"⚠️ Resposta da API ao gerar token: {response.status_code} - {response.text}")
+            return None
     except Exception as e:
-        print(f"❌ Falha crítica na autenticação: {str(e)}")
-        return os.environ.get("ACCESS_TOKEN_TRAY")
+        print(f"❌ Falha na conexão de autenticação: {str(e)}")
+        return None
 
 def buscar_produtos_omie():
     url = "https://app.omie.com.br/api/v1/geral/produtos/"
@@ -64,7 +57,7 @@ def buscar_produtos_omie():
         produtos = dados.get("produto_servico_cadastro", [])
         print(f"✅ Sucesso! Encontrados {len(produtos)} produtos na Omie.")
         
-        # Gera o token em tempo real para a nova loja ativa
+        # Chama a geração do token
         token_tray = gerar_novo_token_tray()
         return token_tray, produtos
     else:
@@ -73,7 +66,7 @@ def buscar_produtos_omie():
 
 def enviar_para_tray(token_tray, produtos):
     if not token_tray or not produtos:
-        print("📭 Processo interrompido: Falha ao obter credenciais válidas da Tray.")
+        print("📭 Processo interrompido: Autenticação da Tray falhou ou não gerou o token.")
         return
         
     url_base_tray = "https://1501119.commercesuite.com.br/web_api/products"
