@@ -4,24 +4,27 @@ import requests
 import time
 
 def gerar_novo_token_tray():
-    """Gera o Access Token utilizando os dados diretos da nova loja homologada"""
+    """Gera o Access Token utilizando o formato x-www-form-urlencoded exigido pela Tray"""
     url_auth = "https://1501119.commercesuite.com.br/web_api/auth"
     
-    # Chaves e credenciais injetadas diretamente para evitar falhas de variáveis vazias
-    payload = {
+    # Mudamos o payload para um dicionário simples que o requests envia como form-data
+    payload_form = {
         "consumer_key": "6e336e768ca02df59b3433580a1498fa6e0c704ca910904d99c43552093e0618",
         "consumer_secret": "2fb170cfa3a677e5d8ecfca275c93ad6b9bd608be04e6e0d9b40fbfdf02f831d",
         "code": "2a015d6992084e723cc9cd57fbf37790a2c9168b3e93bf526f53167ef62ba82e"
     }
-    headers = {"Content-Type": "application/json"}
     
-    print("🔑 Autenticando o aplicativo diretamente na nova loja 1501119...")
+    # O segredo está aqui: tiramos o Content-Type JSON para usar o formato que o Mateus pediu
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    
+    print("🔑 Autenticando o aplicativo no formato correto (Form URL Encoded)...")
     try:
-        response = requests.post(url_auth, headers=headers, data=json.dumps(payload))
+        # Usamos 'data=' em vez de 'data=json.dumps()' para enviar como o cURL da Tray espera
+        response = requests.post(url_auth, headers=headers, data=payload_form)
         if response.status_code in [200, 201]:
             dados = response.json()
             token_gerado = dados.get("access_token")
-            print("✅ Sucesso! Novo Token de acesso gerado e validado!")
+            print("✅ Sucesso absoluto! Novo Token de acesso gerado e validado!")
             return token_gerado
         else:
             print(f"⚠️ Resposta da API ao gerar token: {response.status_code} - {response.text}")
@@ -57,7 +60,7 @@ def buscar_produtos_omie():
         produtos = dados.get("produto_servico_cadastro", [])
         print(f"✅ Sucesso! Encontrados {len(produtos)} produtos na Omie.")
         
-        # Chama a geração do token
+        # Chama a geração do token corrigida
         token_tray = gerar_novo_token_tray()
         return token_tray, produtos
     else:
