@@ -4,7 +4,8 @@ import requests
 import time
 
 def gerar_novo_token_tray():
-    url_auth = "https://1501119.commercesuite.com.br/web_api/auth"
+    # URL corrigida com o domínio correto da sua loja de testes
+    url_auth = "https://siteartigos180comercio.commercesuite.com.br/web_api/auth"
     payload_form = {
         "consumer_key": os.environ.get("CONSUMER_KEY"),
         "consumer_secret": os.environ.get("CONSUMER_SECRET"),
@@ -67,7 +68,8 @@ def enviar_para_tray():
         
     print(f"📦 Encontrados {len(produtos_omie)} produtos na Omie. Iniciando envio para a Tray...")
     
-    url_post_tray = f"https://1501119.commercesuite.com.br/web_api/products?access_token={token_tray}"
+    # URL de destino também corrigida com o domínio certo
+    url_post_tray = f"https://siteartigos180comercio.commercesuite.com.br/web_api/products?access_token={token_tray}"
     headers_tray = {"Content-Type": "application/json"}
     
     # 3. Varre os produtos da Omie e cadastra um por um na Tray
@@ -94,7 +96,7 @@ def enviar_para_tray():
         except Exception as e:
             print(f"❌ Erro ao disparar requisição para a Tray: {str(e)}")
             
-        time.sleep(0.5) # Pausa leve para respeitar o limite da API deles
+        time.sleep(0.5) # Pausa leve para respeitar o limite de requisições por segundo
 
 if __name__ == "__main__":
     enviar_para_tray()
