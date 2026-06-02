@@ -4,23 +4,26 @@ import requests
 import time
 
 def gerar_novo_token_tray():
-    """Gera o Access Token utilizando o formato x-www-form-urlencoded exigido pela Tray"""
+    """
+    Gera o token de acesso para a API da Tray utilizando as credenciais
+    armazenadas de forma segura nas variáveis de ambiente do GitHub.
+    """
     url_auth = "https://1501119.commercesuite.com.br/web_api/auth"
     
-    # Mudamos o payload para um dicionário simples que o requests envia como form-data
+    # As chaves agora são puxadas de forma automática e segura do GitHub Secrets
     payload_form = {
-        "consumer_key": "6e336e768ca02df59b3433580a1498fa6e0c704ca910904d99c43552093e0618",
-        "consumer_secret": "2fb170cfa3a677e5d8ecfca275c93ad6b9bd608be04e6e0d9b40fbfdf02f831d",
-        "code": "2a015d6992084e723cc9cd57fbf37790a2c9168b3e93bf526f53167ef62ba82e"
+        "consumer_key": os.environ.get("CONSUMER_KEY"),
+        "consumer_secret": os.environ.get("CONSUMER_SECRET"),
+        "code": os.environ.get("CODE_TRAY")
     }
     
-    # O segredo está aqui: tiramos o Content-Type JSON para usar o formato que o Mateus pediu
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
     
     print("🔑 Autenticando o aplicativo no formato correto (Form URL Encoded)...")
+    
     try:
-        # Usamos 'data=' em vez de 'data=json.dumps()' para enviar como o cURL da Tray espera
         response = requests.post(url_auth, headers=headers, data=payload_form)
+        
         if response.status_code in [200, 201]:
             dados = response.json()
             token_gerado = dados.get("access_token")
@@ -29,98 +32,7 @@ def gerar_novo_token_tray():
         else:
             print(f"⚠️ Resposta da API ao gerar token: {response.status_code} - {response.text}")
             return None
+            
     except Exception as e:
-        print(f"❌ Falha na conexão de autenticação: {str(e)}")
+        print(f"❌ Erro ao conectar com a API da Tray: {str(e)}")
         return None
-
-def buscar_produtos_omie():
-    url = "https://app.omie.com.br/api/v1/geral/produtos/"
-    app_key = os.environ.get("APP_KEY_OMIE")
-    app_secret = os.environ.get("APP_SECRET_OMIE")
-    
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "call": "ListarProdutos",
-        "app_key": app_key,
-        "app_secret": app_secret,
-        "param": [
-            {
-                "pagina": 1,
-                "registros_por_pagina": 50,
-                "filtrar_apenas_omiepdv": "N"
-            }
-        ]
-    }
-    
-    print("🚀 Buscando produtos cadastrados na OMIE...")
-    response = requests.post(url, headers=headers, data=json.dumps(payload))
-    
-    if response.status_code == 200:
-        dados = response.json()
-        produtos = dados.get("produto_servico_cadastro", [])
-        print(f"✅ Sucesso! Encontrados {len(produtos)} produtos na Omie.")
-        
-        # Chama a geração do token corrigida
-        token_tray = gerar_novo_token_tray()
-        return token_tray, produtos
-    else:
-        print(f"❌ Erro ao buscar na Omie: {response.status_code}")
-        return None, []
-
-def enviar_para_tray(token_tray, produtos):
-    if not token_tray or not produtos:
-        print("📭 Processo interrompido: Autenticação da Tray falhou ou não gerou o token.")
-        return
-        
-    url_base_tray = "https://1501119.commercesuite.com.br/web_api/products"
-    headers = {"Content-Type": "application/json"}
-    
-    print(f"🔄 Iniciando a carga dos produtos na loja homologada...")
-    
-    for item in sorted(produtos, key=lambda x: x.get("codigo_produto", "")):
-        sku = str(item.get("codigo_produto", ""))
-        nome = str(item.get("descricao", ""))
-        preco = str(item.get("valor_venda", 0))
-        peso = item.get("peso_liquido", 0)
-        peso_gramas = str(int(peso * 1000)) if peso else "0"
-        
-        print(f"\n📦 Enviando: {nome} (SKU: {sku})")
-        
-        payload_produto = {
-            "Product": {
-                "code": sku,
-                "name": nome,
-                "price": preco,
-                "cost_price": preco,
-                "stock": "10",
-                "weight": peso_gramas
-            }
-        }
-        
-        url_post = f"{url_base_tray}?access_token={token_tray}"
-        
-        try:
-            response = requests.post(url_post, headers=headers, data=json.dumps(payload_produto))
-            
-            if response.status_code in [200, 201]:
-                print(f"  ✅ Produto cadastrado com sucesso na nova loja Tray!")
-            elif response.status_code == 400 and "já cadastrado" in response.text.lower():
-                print(f"  ⚠️ Produto já existente. Sincronizando dados...")
-                url_busca = f"{url_base_tray}?access_token={token_tray}&code={sku}"
-                res_busca = requests.get(url_busca, headers=headers)
-                if res_busca.status_code == 200 and res_busca.json().get("Products"):
-                    id_tray = res_busca.json()["Products"][0]["Product"]["id"]
-                    url_put = f"{url_base_tray}/{id_tray}?access_token={token_tray}"
-                    requests.put(url_put, headers=headers, data=json.dumps(payload_produto))
-                    print(f"  ✅ Atualizado com sucesso (ID Interno: {id_tray})")
-            else:
-                print(f"  ❌ Erro no envio: {response.status_code} - Verifique a resposta do servidor.")
-                
-        except Exception as e:
-            print(f"  ❌ Falha de comunicação: {str(e)}")
-            
-        time.sleep(0.6)
-
-if __name__ == "__main__":
-    token, lista_de_produtos = buscar_produtos_omie()
-    enviar_para_tray(token, lista_de_produtos)
