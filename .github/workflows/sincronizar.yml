@@ -98,9 +98,10 @@ jobs:
           key: completo-${{ steps.hoje.outputs.dia }}
 
       # Mantém a corrente: dispara a próxima execução (mesmo se esta falhou).
-      # Simulações e execuções manuais de modo específico não encadeiam.
+      # Um "completo" disparado à mão também religa a corrente ao terminar.
+      # Simulações e "incremental" manual não encadeiam.
       - name: Disparar próxima execução
-        if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.modo == 'auto') && inputs.dry_run != true
+        if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.modo == 'auto' || inputs.modo == 'completo') && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh workflow run sincronizar.yml -R "${{ github.repository }}" --ref main -f modo=auto -f dry_run=false
