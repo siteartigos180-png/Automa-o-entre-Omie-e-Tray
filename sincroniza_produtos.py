@@ -297,6 +297,19 @@ class Sincronizador:
                           f"preencher {tray_prod['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
             return
 
+        # Confirmação direta na Tray antes de criar (não confia só no índice do modo
+        # completo, que pode ficar incompleto se o catálogo mudar durante a leitura).
+        if self.indice is not None:
+            existente = self.tray.buscar("reference", ficha["reference"]) or self.tray.buscar("ean", ficha["ean"])
+            if existente:
+                self.indice["ref"][ficha["reference"]] = existente
+                self.cont["achado_na_confirmacao"] += 1
+                novos = campos_a_preencher(existente, ficha)
+                if novos:
+                    self.escrever("PUT", f"/products/{existente['id']}", novos,
+                                  f"preencher {existente['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
+                return
+
         categoria = self.categoria_para(ficha["brand"])
         if not categoria:
             self.cont["sem_categoria"] += 1
