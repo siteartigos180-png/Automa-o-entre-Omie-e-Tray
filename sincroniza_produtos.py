@@ -4,6 +4,7 @@ Sincronização de produtos Omie -> Tray.
 Regras:
   - Só entram produtos ativos e marcados para marketplace/e-commerce no Omie
     (os mesmos do Omie.Hub).
+  - Produto sem marca, ou de marca que não tem categoria na Tray, não entra.
   - Produto do Omie que não existe na Tray: é criado na Tray.
   - Produto que já existe na Tray: só são preenchidos campos que estão vazios
     na Tray (referência, EAN, NCM, peso, medidas, marca). Nada que já tenha
@@ -299,7 +300,8 @@ class Sincronizador:
         categoria = self.categoria_para(ficha["brand"])
         if not categoria:
             self.cont["sem_categoria"] += 1
-            log(f"sem categoria para {ficha['reference']} ({ficha['brand']}) — defina CATEGORIA_PADRAO_ID")
+            motivo = "sem marca no Omie" if not ficha["brand"] else f"marca {ficha['brand']} sem categoria na Tray"
+            log(f"pulado {ficha['reference']} ({motivo})")
             return
         corpo = {k: v for k, v in ficha.items() if not vazio(v)}
         corpo.update({

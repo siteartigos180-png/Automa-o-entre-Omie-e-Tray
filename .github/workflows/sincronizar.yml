@@ -45,7 +45,6 @@ jobs:
           APP_KEY_OMIE: ${{ secrets.APP_KEY_OMIE }}
           APP_SECRET_OMIE: ${{ secrets.APP_SECRET_OMIE }}
           TRAY_URL: https://www.artigos180cosmeticos.com.br/web_api
-          CATEGORIA_PADRAO_ID: ${{ vars.CATEGORIA_PADRAO_ID }}
           MODO: ${{ inputs.modo || 'incremental' }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           DURACAO_SEG: "270"
