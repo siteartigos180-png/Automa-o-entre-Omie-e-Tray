@@ -8,7 +8,9 @@ Regras:
   - Produto do Omie que não existe na Tray: é criado na Tray.
   - Produto que já existe na Tray: só são preenchidos campos que estão vazios
     na Tray (referência, EAN, NCM, peso, medidas, marca). Nada que já tenha
-    valor é sobrescrito e imagens nunca são enviadas.
+    valor é sobrescrito.
+  - Imagens: produto criado, ou existente na Tray com ZERO imagens, recebe as
+    fotos cadastradas no Omie. Produto que já tem alguma imagem nunca é tocado.
 
 Vínculo Omie <-> Tray: codigo (Omie) = reference (Tray); se não achar, EAN.
 
@@ -247,6 +249,11 @@ def ficha_omie(p):
     }
 
 
+def fotos_omie(p):
+    """URLs das fotos do produto no Omie (a Tray aceita até 15)."""
+    return [i["url_imagem"] for i in (p.get("imagens") or []) if i.get("url_imagem")][:15]
+
+
 def campos_a_preencher(tray_prod, ficha):
     """Só campos vazios na Tray que o Omie tem preenchidos."""
     return {c: v for c, v in ficha.items() if vazio(tray_prod.get(c)) and not vazio(v)}
@@ -259,6 +266,9 @@ class Sincronizador:
         self.cont = Counter()
         self.cat_por_marca = {}
         self.indice = None  # usado no modo completo
+        # fotos já enviadas nesta execução: a Tray leva alguns minutos para
+        # processá-las, e nesse meio tempo o produto ainda aparece sem imagem
+        self.fotos_enviadas = set()
 
     def preparar_categorias(self, produtos_tray):
         por_marca = defaultdict(Counter)
@@ -290,11 +300,14 @@ class Sincronizador:
 
         if tray_prod:
             novos = campos_a_preencher(tray_prod, ficha)
-            if not novos:
+            precisa_fotos = not (tray_prod.get("ProductImage") or []) and bool(fotos_omie(p))
+            if novos:
+                self.escrever("PUT", f"/products/{tray_prod['id']}", novos,
+                              f"preencher {tray_prod['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
+            elif not precisa_fotos:
                 self.cont["sem_mudanca"] += 1
-                return
-            self.escrever("PUT", f"/products/{tray_prod['id']}", novos,
-                          f"preencher {tray_prod['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
+            if precisa_fotos:
+                self.enviar_fotos(tray_prod["id"], p, tray_prod)
             return
 
         # Confirmação direta na Tray antes de criar (não confia só no índice do modo
@@ -308,6 +321,7 @@ class Sincronizador:
                 if novos:
                     self.escrever("PUT", f"/products/{existente['id']}", novos,
                                   f"preencher {existente['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
+                self.enviar_fotos(existente["id"], p, existente)
                 return
 
         categoria = self.categoria_para(ficha["brand"])
@@ -325,7 +339,36 @@ class Sincronizador:
             "available": 1,
             "available_in_store": 1,
         })
-        self.escrever("POST", "/products", corpo, f"criar {ficha['reference']} — {corpo['name']}", "criado")
+        novo_id = self.escrever("POST", "/products", corpo, f"criar {ficha['reference']} — {corpo['name']}", "criado")
+        if novo_id:
+            self.enviar_fotos(novo_id, p)
+
+    def enviar_fotos(self, tray_id, p, tray_prod=None):
+        """Envia as fotos do Omie só se o produto não tiver nenhuma imagem na Tray."""
+        fotos = fotos_omie(p)
+        if not fotos or str(tray_id) in self.fotos_enviadas:
+            return
+        if tray_prod is not None and (tray_prod.get("ProductImage") or []):
+            return
+        if tray_prod is None:  # recém-criado: confirma que continua sem imagem
+            r = self.tray.req("GET", f"/products/{tray_id}")
+            if r.status_code != 200 or (r.json()["Product"].get("ProductImage") or []):
+                return
+        corpo = {"Images": {f"picture_source_{n}": u for n, u in enumerate(fotos, 1)}}
+        if DRY_RUN:
+            self.cont["fotos_simulado"] += 1
+            return
+        if self.tray.escritas >= MAX_ESCRITAS:
+            self.cont["adiado_limite"] += 1
+            return
+        self.tray.escritas += 1
+        r = self.tray.req("POST", f"/products/{tray_id}/images", corpo=corpo)
+        if r.status_code in (200, 201):
+            self.fotos_enviadas.add(str(tray_id))
+            self.cont["fotos_enviadas"] += 1
+        else:
+            self.cont["erro"] += 1
+            log(f"ERRO fotos do produto {tray_id}: {r.status_code} {r.text[:200]}")
 
     def escrever(self, metodo, caminho, campos, descricao, chave):
         if DRY_RUN:
@@ -339,11 +382,13 @@ class Sincronizador:
         ok, r = self.tray.gravar(metodo, caminho, {"Product": campos})
         if ok:
             self.cont[chave] += 1
+            novo_id = r.json().get("id") if metodo == "POST" else None
             if self.indice is not None and metodo == "POST":
                 novo = {**campos, "id": r.json().get("id")}
                 self.indice["ref"][campos["reference"]] = novo
                 if campos.get("ean"):
                     self.indice["ean"][campos["ean"]] = novo
+            return novo_id
         else:
             self.cont["erro"] += 1
             log(f"ERRO {descricao}: {r.status_code} {r.text[:300]}")
