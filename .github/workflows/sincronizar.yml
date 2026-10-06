@@ -1,29 +1,54 @@
 name: Sincronizar Produtos Omie para Tray
 
+# Produtos do Omie ativos e marcados para marketplace/e-commerce -> Tray.
+# O GitHub só agenda de 5 em 5 minutos (no mínimo). Cada execução fica ~4,5 min
+# rodando um ciclo de sincronização por minuto, então na prática o sync é por minuto.
 on:
+  schedule:
+    - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      modo:
+        description: "incremental (alterados recentemente) ou completo (catálogo todo)"
+        default: incremental
+        type: choice
+        options: [incremental, completo]
+      dry_run:
+        description: "Simulação (não grava nada na Tray)"
+        default: false
+        type: boolean
+
+# Nunca duas sincronizações ao mesmo tempo; a próxima espera a atual terminar.
+concurrency:
+  group: sync-omie-tray
+  cancel-in-progress: false
 
 jobs:
   sincronizar:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
 
     steps:
-    - name: Baixar o código do repositório
-      uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Configurar o Python no servidor
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-    - name: Instalar dependências de internet
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests
+      - run: pip install requests
 
-    - name: Executar o Motor de Integração
-      env:
-        APP_KEY_OMIE: ${{ secrets.APP_KEY_OMIE }}
-        APP_SECRET_OMIE: ${{ secrets.APP_SECRET_OMIE }}
-        ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
-      run: python sincroniza_produtos.py
+      - name: Sincronizar
+        env:
+          CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
+          CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
+          CODE_TRAY: ${{ secrets.CODE_TRAY }}
+          APP_KEY_OMIE: ${{ secrets.APP_KEY_OMIE }}
+          APP_SECRET_OMIE: ${{ secrets.APP_SECRET_OMIE }}
+          TRAY_URL: https://www.artigos180cosmeticos.com.br/web_api
+          CATEGORIA_PADRAO_ID: ${{ vars.CATEGORIA_PADRAO_ID }}
+          MODO: ${{ inputs.modo || 'incremental' }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          DURACAO_SEG: "270"
+          INTERVALO_SEG: "60"
+          JANELA_MIN: "10"
+        run: python sincroniza_produtos.py

@@ -1,101 +1,373 @@
+"""
+Sincronização de produtos Omie -> Tray.
+
+Regras:
+  - Só entram produtos ativos e marcados para marketplace/e-commerce no Omie
+    (os mesmos do Omie.Hub).
+  - Produto do Omie que não existe na Tray: é criado na Tray.
+  - Produto que já existe na Tray: só são preenchidos campos que estão vazios
+    na Tray (referência, EAN, NCM, peso, medidas, marca). Nada que já tenha
+    valor é sobrescrito e imagens nunca são enviadas.
+
+Vínculo Omie <-> Tray: codigo (Omie) = reference (Tray); se não achar, EAN.
+
+Modos (variável MODO):
+  incremental  produtos alterados no Omie nos últimos minutos, em ciclos a
+               cada INTERVALO_SEG segundos durante DURACAO_SEG segundos.
+  completo     varre todo o catálogo do Omie (carga inicial / conferência).
+
+Com DRY_RUN=1 nada é gravado na Tray: só mostra o que seria feito.
+"""
 import os
-import json
-import requests
+import sys
 import time
+import json
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 
-def gerar_novo_token_tray():
-    # URL Corrigida: Removido o ponto extra antes de commercesuite
-    url_auth = "https://siteartigos180comercio.commercesuite.com.br/web_api/auth"
-    payload_form = {
-        "consumer_key": os.environ.get("CONSUMER_KEY"),
-        "consumer_secret": os.environ.get("CONSUMER_SECRET"),
-        "code": os.environ.get("CODE_TRAY")
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    
+import unicodedata
+
+import requests
+
+TRAY_URL = os.environ.get("TRAY_URL", "https://www.artigos180cosmeticos.com.br/web_api").rstrip("/")
+OMIE_URL = "https://app.omie.com.br/api/v1"
+
+MODO = os.environ.get("MODO", "incremental")
+DRY_RUN = os.environ.get("DRY_RUN", "1") == "1"
+DURACAO_SEG = int(os.environ.get("DURACAO_SEG", "0"))
+INTERVALO_SEG = int(os.environ.get("INTERVALO_SEG", "60"))
+JANELA_MIN = int(os.environ.get("JANELA_MIN", "10"))
+MAX_ESCRITAS = int(os.environ.get("MAX_ESCRITAS", "100000"))
+CATEGORIA_PADRAO = os.environ.get("CATEGORIA_PADRAO_ID", "")
+LIMITE_OMIE = int(os.environ.get("LIMITE_OMIE", "0"))  # 0 = sem limite (útil para testes)
+
+BRT = timezone(timedelta(hours=-3))
+
+
+def log(msg):
+    print(f"[{datetime.now(BRT):%H:%M:%S}] {msg}", flush=True)
+
+
+def vazio(valor):
+    if valor is None:
+        return True
+    texto = str(valor).strip()
+    if texto == "":
+        return True
     try:
-        response = requests.post(url_auth, headers=headers, data=payload_form)
-        if response.status_code in [200, 201]:
-            dados = response.json()
-            return dados.get("access_token")
-        else:
-            print(f"⚠️ Erro ao gerar token Tray: {response.status_code} - {response.text}")
+        return float(texto.replace(",", ".")) == 0
+    except ValueError:
+        return False
+
+
+# ---------------------------------------------------------------- Tray
+
+class Tray:
+    INTERVALO_MIN = 0.35  # 180 req/min
+
+    def __init__(self):
+        self.s = requests.Session()
+        self.token = None
+        self.refresh = None
+        self.expira = None
+        self.ultima = 0.0
+        self.escritas = 0
+
+    def autenticar(self):
+        r = self.s.post(f"{TRAY_URL}/auth", data={
+            "consumer_key": os.environ["CONSUMER_KEY"],
+            "consumer_secret": os.environ["CONSUMER_SECRET"],
+            "code": os.environ["CODE_TRAY"],
+        }, timeout=60)
+        dados = r.json()
+        if "access_token" not in dados:
+            raise RuntimeError(f"Falha ao autenticar na Tray: {r.status_code} {dados}")
+        self._guardar(dados)
+        if self.expira <= datetime.now(BRT) + timedelta(minutes=5):
+            self.renovar()
+        log(f"Tray autenticada (loja {dados.get('store_id')}, token até {self.expira:%d/%m %H:%M})")
+
+    def renovar(self):
+        r = self.s.get(f"{TRAY_URL}/auth", params={"refresh_token": self.refresh}, timeout=60)
+        dados = r.json()
+        if "access_token" not in dados:
+            raise RuntimeError(f"Falha ao renovar token da Tray: {r.status_code} {dados}")
+        self._guardar(dados)
+
+    def _guardar(self, dados):
+        self.token = dados["access_token"]
+        self.refresh = dados["refresh_token"]
+        self.expira = datetime.strptime(dados["date_expiration_access_token"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=BRT)
+
+    def req(self, metodo, caminho, params=None, corpo=None):
+        if self.expira and self.expira <= datetime.now(BRT) + timedelta(minutes=2):
+            self.renovar()
+        for tentativa in range(6):
+            espera = self.INTERVALO_MIN - (time.time() - self.ultima)
+            if espera > 0:
+                time.sleep(espera)
+            self.ultima = time.time()
+            p = dict(params or {}, access_token=self.token)
+            r = self.s.request(metodo, f"{TRAY_URL}{caminho}", params=p,
+                               data=json.dumps(corpo) if corpo is not None else None,
+                               headers={"Content-Type": "application/json"} if corpo is not None else None,
+                               timeout=90)
+            if r.status_code == 401:
+                self.renovar()
+                continue
+            if r.status_code == 429 or r.status_code >= 500:
+                time.sleep(min(60, 5 * (tentativa + 1)))
+                continue
+            return r
+        return r
+
+    def buscar(self, campo, valor):
+        if vazio(valor):
             return None
-    except Exception as e:
-        print(f"❌ Erro de conexão com API da Tray: {str(e)}")
-        return None
+        r = self.req("GET", "/products", {campo: valor, "limit": 2})
+        if r.status_code != 200:
+            return None
+        produtos = r.json().get("Products", [])
+        return produtos[0]["Product"] if len(produtos) == 1 else None
 
-def puxar_produtos_omie():
-    url = "https://app.omie.com.br/api/v1/geral/produtos/"
-    payload = {
-        "call": "ListarProdutos",
-        "app_key": os.environ.get("APP_KEY_OMIE", "").strip(),
-        "app_secret": os.environ.get("APP_SECRET_OMIE", "").strip(),
-        "param": [{
-            "pagina": 1,
-            "registros_por_pagina": 10,
-            "apenas_importado_api": "N"
-        }]
-    }
-    headers = {"Content-Type": "application/json"}
-    
+    def listar_todos(self):
+        pagina, todos = 1, []
+        while True:
+            r = self.req("GET", "/products", {"limit": 50, "page": pagina})
+            produtos = r.json().get("Products", []) if r.status_code == 200 else []
+            if not produtos:
+                return todos
+            todos += [p["Product"] for p in produtos]
+            pagina += 1
+
+    def gravar(self, metodo, caminho, corpo):
+        self.escritas += 1
+        r = self.req(metodo, caminho, corpo=corpo)
+        ok = r.status_code in (200, 201)
+        return ok, r
+
+
+# ---------------------------------------------------------------- Omie
+
+class Omie:
+    def __init__(self):
+        self.s = requests.Session()
+
+    def call(self, servico, metodo, param):
+        corpo = {"call": metodo, "app_key": os.environ["APP_KEY_OMIE"],
+                 "app_secret": os.environ["APP_SECRET_OMIE"], "param": [param]}
+        for tentativa in range(6):
+            try:
+                r = self.s.post(f"{OMIE_URL}/{servico}/", json=corpo, timeout=120)
+                dados = r.json()
+            except Exception as e:
+                log(f"Omie: erro de conexão ({e}), tentando de novo")
+                time.sleep(10 * (tentativa + 1))
+                continue
+            if "faultstring" in dados:
+                falha = dados["faultstring"]
+                if "Não existem registros" in falha:
+                    return {}
+                if "Consumo redundante" in falha or "bloqueada" in falha.lower() or r.status_code in (425, 429, 500):
+                    log(f"Omie: {falha[:120]} — aguardando")
+                    time.sleep(30 * (tentativa + 1))
+                    continue
+                raise RuntimeError(f"Omie {metodo}: {falha}")
+            return dados
+        raise RuntimeError(f"Omie {metodo}: muitas falhas seguidas")
+
+    def produtos(self, desde=None):
+        pagina = 1
+        while True:
+            # só produtos ativos e marcados para venda em marketplace/e-commerce (os do Omie.Hub)
+            param = {"pagina": pagina, "registros_por_pagina": 100,
+                     "apenas_importado_api": "N", "filtrar_apenas_omiepdv": "N",
+                     "filtrar_apenas_marketplace": "S", "inativo": "N"}
+            if desde:
+                param.update({"filtrar_por_data_de": desde.strftime("%d/%m/%Y"),
+                              "filtrar_por_hora_de": desde.strftime("%H:%M:%S")})
+            dados = self.call("geral/produtos", "ListarProdutos", param)
+            for p in dados.get("produto_servico_cadastro", []):
+                yield p
+            if pagina >= dados.get("total_de_paginas", 0):
+                return
+            pagina += 1
+
+
+# ---------------------------------------------------------------- regras
+
+def chave_marca(marca):
+    sem_acento = unicodedata.normalize("NFKD", marca or "").encode("ascii", "ignore").decode()
+    return " ".join(sem_acento.upper().split())
+
+
+def ncm_tray(ncm):
+    return "".join(c for c in str(ncm or "") if c.isdigit())[:8]
+
+
+def peso_gramas(p):
+    kg = p.get("peso_bruto") or p.get("peso_liq") or 0
     try:
-        response = requests.post(url, data=json.dumps(payload), headers=headers)
-        if response.status_code == 200:
-            dados = response.json()
-            return dados.get("produto_service_cadastro", [])
-        else:
-            print(f"⚠️ Erro ao puxar dados da Omie: {response.status_code}")
-            return []
-    except Exception as e:
-        print(f"❌ Erro de conexão com Omie: {str(e)}")
-        return []
+        return int(round(float(kg) * 1000))
+    except (TypeError, ValueError):
+        return 0
 
-def enviar_para_tray():
-    print("🚀 Iniciando Motor de Integração Customizado...")
-    
-    # 1. Pega o token da Tray
-    token_tray = gerar_novo_token_tray()
-    if not token_tray:
-        print("❌ Interrompendo: Não foi possível obter o Token da Tray.")
-        return
-        
-    # 2. Puxa os produtos cadastrados na Omie
-    produtos_omie = puxar_produtos_omie()
-    if not produtos_omie:
-        print("⚠️ Nenhum produto encontrado na Omie para sincronizar.")
-        return
-        
-    print(f"📦 Encontrados {len(produtos_omie)} produtos na Omie. Iniciando envio para a Tray...")
-    
-    # URL Corrigida aqui também
-    url_post_tray = f"https://siteartigos180comercio.commercesuite.com.br/web_api/products?access_token={token_tray}"
-    headers_tray = {"Content-Type": "application/json"}
-    
-    # 3. Varre os produtos da Omie e cadastra um por um na Tray
-    for p in sorted(produtos_omie, key=lambda x: x.get('codigo_produto', 0)):
-        payload_tray = {
-            "Product": {
-                "ean": p.get('codigo_barras', ''),
-                "name": p.get('descricao', 'Produto Sem Nome'),
-                "reference": p.get('codigo_produto_integracao', ''),
-                "weight": str(p.get('peso_liquido', '0'))
-            }
-        }
-        
-        try:
-            print(f"⚡ Enviando ID Omie {p.get('codigo_produto')} - {p.get('descricao')}...")
-            response = requests.post(url_post_tray, data=json.dumps(payload_tray), headers=headers_tray)
-            
-            if response.status_code in [200, 201]:
-                print(f"✅ Sucesso absoluto! Produto cadastrado na Tray.")
-            else:
-                print(f"🔴 A API da Tray rejeitou este item. Status: {response.status_code} - Retorno: {response.text}")
-                
-        except Exception as e:
-            print(f"❌ Erro ao disparar requisição para a Tray: {str(e)}")
-            
-        time.sleep(0.5)
+
+def ficha_omie(p):
+    """Campos da ficha da Tray a partir do produto do Omie (sem imagens)."""
+    return {
+        "reference": str(p.get("codigo") or "").strip(),
+        "ean": str(p.get("ean") or "").strip(),
+        "ncm": ncm_tray(p.get("ncm")),
+        "weight": peso_gramas(p),
+        "length": p.get("profundidade") or 0,
+        "width": p.get("largura") or 0,
+        "height": p.get("altura") or 0,
+        "brand": str(p.get("marca") or "").strip(),
+    }
+
+
+def campos_a_preencher(tray_prod, ficha):
+    """Só campos vazios na Tray que o Omie tem preenchidos."""
+    return {c: v for c, v in ficha.items() if vazio(tray_prod.get(c)) and not vazio(v)}
+
+
+class Sincronizador:
+    def __init__(self):
+        self.tray = Tray()
+        self.omie = Omie()
+        self.cont = Counter()
+        self.cat_por_marca = {}
+        self.indice = None  # usado no modo completo
+
+    def preparar_categorias(self, produtos_tray):
+        por_marca = defaultdict(Counter)
+        for p in produtos_tray:
+            if p.get("brand") and p.get("category_id"):
+                por_marca[chave_marca(p["brand"])][p["category_id"]] += 1
+        self.cat_por_marca = {m: c.most_common(1)[0][0] for m, c in por_marca.items()}
+
+    def categoria_para(self, marca):
+        return self.cat_por_marca.get(chave_marca(marca)) or CATEGORIA_PADRAO
+
+    def localizar(self, ficha):
+        if self.indice is not None:
+            return self.indice["ref"].get(ficha["reference"]) or self.indice["ean"].get(ficha["ean"])
+        return self.tray.buscar("reference", ficha["reference"]) or self.tray.buscar("ean", ficha["ean"])
+
+    def processar(self, p):
+        if p.get("inativo") == "S":
+            self.cont["ignorado_inativo"] += 1
+            return
+        ficha = ficha_omie(p)
+        if not ficha["reference"]:
+            self.cont["ignorado_sem_codigo"] += 1
+            return
+        tray_prod = self.localizar(ficha)
+
+        if tray_prod:
+            novos = campos_a_preencher(tray_prod, ficha)
+            if not novos:
+                self.cont["sem_mudanca"] += 1
+                return
+            self.escrever("PUT", f"/products/{tray_prod['id']}", novos,
+                          f"preencher {tray_prod['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
+            return
+
+        categoria = self.categoria_para(ficha["brand"])
+        if not categoria:
+            self.cont["sem_categoria"] += 1
+            log(f"sem categoria para {ficha['reference']} ({ficha['brand']}) — defina CATEGORIA_PADRAO_ID")
+            return
+        corpo = {k: v for k, v in ficha.items() if not vazio(v)}
+        corpo.update({
+            "name": (p.get("descricao") or "").strip()[:200],
+            "price": p.get("valor_unitario") or 0,
+            "stock": int(float(p.get("quantidade_estoque") or 0)),
+            "category_id": categoria,
+            "available": 1,
+            "available_in_store": 1,
+        })
+        self.escrever("POST", "/products", corpo, f"criar {ficha['reference']} — {corpo['name']}", "criado")
+
+    def escrever(self, metodo, caminho, campos, descricao, chave):
+        if DRY_RUN:
+            self.cont[f"{chave}_simulado"] += 1
+            if self.cont[f"{chave}_simulado"] <= 20:
+                log(f"[simulação] {descricao} -> {campos}")
+            return
+        if self.tray.escritas >= MAX_ESCRITAS:
+            self.cont["adiado_limite"] += 1
+            return
+        ok, r = self.tray.gravar(metodo, caminho, {"Product": campos})
+        if ok:
+            self.cont[chave] += 1
+            if self.indice is not None and metodo == "POST":
+                novo = {**campos, "id": r.json().get("id")}
+                self.indice["ref"][campos["reference"]] = novo
+                if campos.get("ean"):
+                    self.indice["ean"][campos["ean"]] = novo
+        else:
+            self.cont["erro"] += 1
+            log(f"ERRO {descricao}: {r.status_code} {r.text[:300]}")
+
+    def rodar_completo(self):
+        log("Lendo catálogo da Tray…")
+        todos = self.tray.listar_todos()
+        log(f"{len(todos)} produtos na Tray")
+        self.preparar_categorias(todos)
+        self.indice = {"ref": {}, "ean": {}}
+        for p in todos:
+            if not vazio(p.get("reference")):
+                self.indice["ref"][str(p["reference"]).strip()] = p
+            if not vazio(p.get("ean")):
+                self.indice["ean"][str(p["ean"]).strip()] = p
+        log("Lendo catálogo do Omie e sincronizando…")
+        for n, p in enumerate(self.omie.produtos(), 1):
+            self.processar(p)
+            if n % 1000 == 0:
+                log(f"{n} produtos do Omie processados — {dict(self.cont)}")
+            if LIMITE_OMIE and n >= LIMITE_OMIE:
+                break
+
+    def rodar_incremental(self):
+        # categoria por marca: amostra rápida das primeiras páginas da Tray
+        amostra = []
+        for pagina in range(1, 21):
+            r = self.tray.req("GET", "/products", {"limit": 50, "page": pagina})
+            produtos = r.json().get("Products", []) if r.status_code == 200 else []
+            amostra += [x["Product"] for x in produtos]
+            if len(produtos) < 50:
+                break
+        self.preparar_categorias(amostra)
+
+        inicio_job = time.time()
+        desde = datetime.now(BRT) - timedelta(minutes=JANELA_MIN)
+        while True:
+            ciclo = datetime.now(BRT)
+            vistos = 0
+            for p in self.omie.produtos(desde=desde):
+                vistos += 1
+                self.processar(p)
+            log(f"ciclo: {vistos} alterados no Omie desde {desde:%d/%m %H:%M:%S} — {dict(self.cont)}")
+            desde = ciclo - timedelta(minutes=1)
+            if time.time() - inicio_job + INTERVALO_SEG > DURACAO_SEG:
+                return
+            time.sleep(max(0, INTERVALO_SEG - (datetime.now(BRT) - ciclo).total_seconds()))
+
+
+def main():
+    log(f"Modo {MODO}{' (SIMULAÇÃO — nada será gravado)' if DRY_RUN else ''}")
+    s = Sincronizador()
+    s.tray.autenticar()
+    if MODO == "completo":
+        s.rodar_completo()
+    else:
+        s.rodar_incremental()
+    log(f"Resumo: {dict(s.cont)} | escritas na Tray: {s.tray.escritas}")
+    if s.cont["erro"]:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    enviar_para_tray()
+    main()
