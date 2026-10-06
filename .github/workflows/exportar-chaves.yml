@@ -1,0 +1,21 @@
+name: Exportar chaves (criptografado)
+on: workflow_dispatch
+
+jobs:
+  exportar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar age
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq age
+      - name: Criptografar secrets
+        env:
+          CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
+          CONSUMER_SECRET: ${{ secrets.CONSUMER_SECRET }}
+          CODE_TRAY: ${{ secrets.CODE_TRAY }}
+          ACCESS_TOKEN_TRAY: ${{ secrets.ACCESS_TOKEN_TRAY }}
+          APP_KEY_OMIE: ${{ secrets.APP_KEY_OMIE }}
+          APP_SECRET_OMIE: ${{ secrets.APP_SECRET_OMIE }}
+        run: |
+          printf 'CONSUMER_KEY=%s\nCONSUMER_SECRET=%s\nCODE_TRAY=%s\nACCESS_TOKEN_TRAY=%s\nAPP_KEY_OMIE=%s\nAPP_SECRET_OMIE=%s\n' \
+            "$CONSUMER_KEY" "$CONSUMER_SECRET" "$CODE_TRAY" "$ACCESS_TOKEN_TRAY" "$APP_KEY_OMIE" "$APP_SECRET_OMIE" \
+          | age -a -r age1xhxdsm32zcrpafjnwa0wc43f33qv8p9hc4y885pvejeckatnuflslfevxm
