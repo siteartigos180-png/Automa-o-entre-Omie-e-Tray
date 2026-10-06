@@ -25,6 +25,7 @@ import json
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
+import html
 import unicodedata
 
 import requests
@@ -108,10 +109,15 @@ class Tray:
                 time.sleep(espera)
             self.ultima = time.time()
             p = dict(params or {}, access_token=self.token)
-            r = self.s.request(metodo, f"{TRAY_URL}{caminho}", params=p,
-                               data=json.dumps(corpo) if corpo is not None else None,
-                               headers={"Content-Type": "application/json"} if corpo is not None else None,
-                               timeout=90)
+            try:
+                r = self.s.request(metodo, f"{TRAY_URL}{caminho}", params=p,
+                                   data=json.dumps(corpo) if corpo is not None else None,
+                                   headers={"Content-Type": "application/json"} if corpo is not None else None,
+                                   timeout=90)
+            except requests.RequestException as e:
+                log(f"Tray: erro de conexão ({e}), tentando de novo")
+                time.sleep(10 * (tentativa + 1))
+                continue
             if r.status_code == 401:
                 self.renovar()
                 continue
@@ -119,22 +125,35 @@ class Tray:
                 time.sleep(min(60, 5 * (tentativa + 1)))
                 continue
             return r
-        return r
+        raise RuntimeError(f"Tray {metodo} {caminho}: muitas falhas seguidas")
 
     def buscar(self, campo, valor):
         if vazio(valor):
             return None
-        r = self.req("GET", "/products", {campo: valor, "limit": 2})
+        r = self.req("GET", "/products", {campo: valor, "limit": 5})
         if r.status_code != 200:
-            return None
+            raise RuntimeError(f"Tray: falha ao buscar {campo}={valor}: {r.status_code} {r.text[:200]}")
         produtos = r.json().get("Products", [])
-        return produtos[0]["Product"] if len(produtos) == 1 else None
+        if len(produtos) > 1:
+            log(f"atenção: {len(produtos)} produtos na Tray com {campo}={valor}; usando o primeiro ({produtos[0]['Product']['id']})")
+        return produtos[0]["Product"] if produtos else None
+
+    def categoria_da_marca(self, marca):
+        """Categoria mais usada pelos produtos dessa marca na Tray."""
+        r = self.req("GET", "/products", {"brand": marca, "limit": 50})
+        if r.status_code != 200:
+            raise RuntimeError(f"Tray: falha ao buscar marca {marca}: {r.status_code}")
+        cats = Counter(x["Product"].get("category_id") for x in r.json().get("Products", [])
+                       if x["Product"].get("category_id"))
+        return cats.most_common(1)[0][0] if cats else None
 
     def listar_todos(self):
         pagina, todos = 1, []
         while True:
             r = self.req("GET", "/products", {"limit": 50, "page": pagina})
-            produtos = r.json().get("Products", []) if r.status_code == 200 else []
+            if r.status_code != 200:
+                raise RuntimeError(f"Tray: falha ao listar página {pagina}: {r.status_code} {r.text[:200]}")
+            produtos = r.json().get("Products", [])
             if not produtos:
                 return todos
             todos += [p["Product"] for p in produtos]
@@ -248,7 +267,10 @@ class Sincronizador:
         self.cat_por_marca = {m: c.most_common(1)[0][0] for m, c in por_marca.items()}
 
     def categoria_para(self, marca):
-        return self.cat_por_marca.get(chave_marca(marca)) or CATEGORIA_PADRAO
+        chave = chave_marca(marca)
+        if chave and chave not in self.cat_por_marca and self.indice is None:
+            self.cat_por_marca[chave] = self.tray.categoria_da_marca(marca)
+        return self.cat_por_marca.get(chave) or CATEGORIA_PADRAO
 
     def localizar(self, ficha):
         if self.indice is not None:
@@ -281,7 +303,7 @@ class Sincronizador:
             return
         corpo = {k: v for k, v in ficha.items() if not vazio(v)}
         corpo.update({
-            "name": (p.get("descricao") or "").strip()[:200],
+            "name": html.unescape(p.get("descricao") or "").strip()[:200],
             "price": p.get("valor_unitario") or 0,
             "stock": int(float(p.get("quantidade_estoque") or 0)),
             "category_id": categoria,
@@ -331,16 +353,6 @@ class Sincronizador:
                 break
 
     def rodar_incremental(self):
-        # categoria por marca: amostra rápida das primeiras páginas da Tray
-        amostra = []
-        for pagina in range(1, 21):
-            r = self.tray.req("GET", "/products", {"limit": 50, "page": pagina})
-            produtos = r.json().get("Products", []) if r.status_code == 200 else []
-            amostra += [x["Product"] for x in produtos]
-            if len(produtos) < 50:
-                break
-        self.preparar_categorias(amostra)
-
         inicio_job = time.time()
         desde = datetime.now(BRT) - timedelta(minutes=JANELA_MIN)
         while True:
