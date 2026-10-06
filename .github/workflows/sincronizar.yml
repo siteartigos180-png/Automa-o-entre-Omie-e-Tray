@@ -1,23 +1,22 @@
 name: Sincronizar Produtos Omie para Tray
 
 # Produtos do Omie ativos e marcados para marketplace/e-commerce -> Tray.
-# - A cada 5 minutos: modo incremental (cada execução fica ~4,5 min rodando
-#   um ciclo por minuto com o que mudou no Omie).
-# - 1x por dia: a primeira execução agendada depois das 03:00 (Brasília) roda o
+# - Modo "auto": sync incremental com um ciclo por minuto durante ~55 min; ao
+#   terminar, a execução dispara a próxima (corrente contínua). Não depende do
+#   agendamento do GitHub, que é instável; o cron abaixo fica só como reserva
+#   para religar a corrente se ela parar.
+# - 1x por dia: a primeira execução "auto" depois das 03:00 (Brasília) roda o
 #   modo completo (confere o catálogo inteiro) e grava uma marca no cache do dia.
-#   Fica dentro da execução agendada de propósito: como as execuções dividem a
-#   mesma fila, um "completo" esperando na fila seria descartado pelo GitHub
-#   quando chegasse o próximo agendamento de 5 min.
 on:
   schedule:
     - cron: "0-59/5 * * * *"
   workflow_dispatch:
     inputs:
       modo:
-        description: "incremental (alterados recentemente) ou completo (catálogo todo)"
-        default: incremental
+        description: "auto (contínuo + completo diário), incremental ou completo"
+        default: auto
         type: choice
-        options: [incremental, completo]
+        options: [auto, incremental, completo]
       dry_run:
         description: "Simulação (não grava nada na Tray)"
         default: false
@@ -27,6 +26,10 @@ on:
 concurrency:
   group: sync-omie-tray
   cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write   # para a execução disparar a próxima
 
 jobs:
   sincronizar:
@@ -50,7 +53,7 @@ jobs:
 
       - name: Completo de hoje já rodou?
         id: marca
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || inputs.modo == 'auto'
         uses: actions/cache/restore@v4
         with:
           path: .completo-feito
@@ -60,7 +63,7 @@ jobs:
       - name: Escolher modo
         id: modo
         run: |
-          if [ -n "${{ inputs.modo }}" ]; then
+          if [ -n "${{ inputs.modo }}" ] && [ "${{ inputs.modo }}" != "auto" ]; then
             echo "modo=${{ inputs.modo }}" >> "$GITHUB_OUTPUT"
           elif [ "${{ steps.hoje.outputs.hora }}" -ge 3 ] && [ "${{ steps.marca.outputs.cache-hit }}" != "true" ]; then
             echo "modo=completo" >> "$GITHUB_OUTPUT"
@@ -78,18 +81,26 @@ jobs:
           TRAY_URL: https://www.artigos180cosmeticos.com.br/web_api
           MODO: ${{ steps.modo.outputs.modo }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
-          DURACAO_SEG: "270"
+          DURACAO_SEG: "3300"
           INTERVALO_SEG: "60"
           JANELA_MIN: "10"
         run: python sincroniza_produtos.py
 
       - name: Marcar completo de hoje como feito
-        if: github.event_name == 'schedule' && steps.modo.outputs.modo == 'completo' && success()
+        if: (github.event_name == 'schedule' || inputs.modo == 'auto') && steps.modo.outputs.modo == 'completo' && success()
         run: date > .completo-feito
 
       - name: Salvar marca do dia
-        if: github.event_name == 'schedule' && steps.modo.outputs.modo == 'completo' && success()
+        if: (github.event_name == 'schedule' || inputs.modo == 'auto') && steps.modo.outputs.modo == 'completo' && success()
         uses: actions/cache/save@v4
         with:
           path: .completo-feito
           key: completo-${{ steps.hoje.outputs.dia }}
+
+      # Mantém a corrente: dispara a próxima execução (mesmo se esta falhou).
+      # Simulações e execuções manuais de modo específico não encadeiam.
+      - name: Disparar próxima execução
+        if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.modo == 'auto') && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run sincronizar.yml -R "${{ github.repository }}" --ref main -f modo=auto -f dry_run=false
