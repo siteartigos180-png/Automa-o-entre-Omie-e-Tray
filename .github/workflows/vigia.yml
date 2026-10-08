@@ -1,0 +1,35 @@
+name: Vigia da sincronização
+
+# Religa a corrente de sincronização quando ela para sozinha.
+# A execução de sync dispara a próxima no último passo; se a máquina do GitHub
+# cair no meio (já aconteceu: "runner lost communication"), esse passo nunca roda
+# e a corrente para. Este workflow roda sempre que uma execução de sync termina
+# e, se não houver outra em andamento ou na fila, dispara uma nova.
+# Execuções canceladas à mão não são religadas (cancelar = parar de propósito).
+on:
+  workflow_run:
+    workflows: ["Sincronizar Produtos Omie para Tray"]
+    types: [completed]
+
+permissions:
+  actions: write
+
+jobs:
+  religar:
+    if: github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Religar a corrente se ela parou
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          sleep 30  # dá tempo da execução que terminou disparar a próxima
+          ativas=$(gh run list -R "$REPO" -w sincronizar.yml -L 20 --json status \
+            -q '[.[] | select(.status != "completed")] | length')
+          if [ "$ativas" = "0" ]; then
+            echo "Nenhuma sincronização ativa: religando a corrente."
+            gh workflow run sincronizar.yml -R "$REPO" --ref main -f modo=auto -f dry_run=false
+          else
+            echo "Corrente ativa ($ativas execução(ões) em andamento/fila). Nada a fazer."
+          fi

@@ -43,7 +43,10 @@ INTERVALO_SEG = int(os.environ.get("INTERVALO_SEG", "60"))
 JANELA_MIN = int(os.environ.get("JANELA_MIN", "10"))
 MAX_ESCRITAS = int(os.environ.get("MAX_ESCRITAS", "100000"))
 CATEGORIA_PADRAO = os.environ.get("CATEGORIA_PADRAO_ID", "")
-LIMITE_OMIE = int(os.environ.get("LIMITE_OMIE", "0"))  # 0 = sem limite (útil para testes)
+LIMITE_OMIE = int(os.environ.get("LIMITE_OMIE", "0"))
+# Local de estoque do Omie usado para o estoque na Tray ("Artigos - Loja").
+# O campo quantidade_estoque da listagem de produtos não serve: vem zerado.
+LOCAL_ESTOQUE = int(os.environ.get("LOCAL_ESTOQUE_OMIE", "2423153066"))  # 0 = sem limite (útil para testes)
 
 BRT = timezone(timedelta(hours=-3))
 
@@ -198,6 +201,26 @@ class Omie:
             return dados
         raise RuntimeError(f"Omie {metodo}: muitas falhas seguidas")
 
+    def saldos_local(self):
+        """Saldo de todos os produtos no local de estoque configurado: {codigo: saldo}."""
+        saldos, pagina = {}, 1
+        hoje = datetime.now(BRT).strftime("%d/%m/%Y")
+        while True:
+            dados = self.call("estoque/consulta", "ListarPosEstoque",
+                              {"nPagina": pagina, "nRegPorPagina": 500, "dDataPosicao": hoje,
+                               "cExibeTodos": "S", "codigo_local_estoque": LOCAL_ESTOQUE})
+            for p in dados.get("produtos", []):
+                saldos[p["cCodigo"]] = int(float(p.get("nSaldo") or 0))
+            if pagina >= dados.get("nTotPaginas", 0):
+                return saldos
+            pagina += 1
+
+    def saldo_produto(self, codigo_produto):
+        dados = self.call("estoque/consulta", "PosicaoEstoque",
+                          {"codigo_local_estoque": LOCAL_ESTOQUE, "id_prod": codigo_produto,
+                           "data": datetime.now(BRT).strftime("%d/%m/%Y")})
+        return int(float(dados.get("saldo") or 0))
+
     def produtos(self, desde=None):
         pagina = 1
         while True:
@@ -269,6 +292,7 @@ class Sincronizador:
         # fotos já enviadas nesta execução: a Tray leva alguns minutos para
         # processá-las, e nesse meio tempo o produto ainda aparece sem imagem
         self.fotos_enviadas = set()
+        self.saldos = None  # modo completo: saldos do local carregados de uma vez
 
     def preparar_categorias(self, produtos_tray):
         por_marca = defaultdict(Counter)
@@ -276,6 +300,12 @@ class Sincronizador:
             if p.get("brand") and p.get("category_id"):
                 por_marca[chave_marca(p["brand"])][p["category_id"]] += 1
         self.cat_por_marca = {m: c.most_common(1)[0][0] for m, c in por_marca.items()}
+
+    def estoque_de(self, p):
+        """Estoque do produto no local "Artigos - Loja" do Omie."""
+        if self.saldos is not None:
+            return self.saldos.get(p.get("codigo"), 0)
+        return self.saldo_produto(p["codigo_produto"])
 
     def categoria_para(self, marca):
         chave = chave_marca(marca)
@@ -334,7 +364,7 @@ class Sincronizador:
         corpo.update({
             "name": html.unescape(p.get("descricao") or "").strip()[:200],
             "price": p.get("valor_unitario") or 0,
-            "stock": int(float(p.get("quantidade_estoque") or 0)),
+            "stock": self.estoque_de(p),
             "category_id": categoria,
             "available": 1,
             "available_in_store": 1,
@@ -404,6 +434,9 @@ class Sincronizador:
                 self.indice["ref"][str(p["reference"]).strip()] = p
             if not vazio(p.get("ean")):
                 self.indice["ean"][str(p["ean"]).strip()] = p
+        log("Lendo saldos do local de estoque do Omie…")
+        self.saldos = self.omie.saldos_local()
+        log(f"{len(self.saldos)} saldos no local {LOCAL_ESTOQUE}")
         log("Lendo catálogo do Omie e sincronizando…")
         for n, p in enumerate(self.omie.produtos(), 1):
             self.processar(p)
