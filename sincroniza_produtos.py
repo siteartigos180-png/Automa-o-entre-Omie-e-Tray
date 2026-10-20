@@ -4,11 +4,15 @@ Sincronização de produtos Omie -> Tray.
 Regras:
   - Só entram produtos ativos e marcados para marketplace/e-commerce no Omie
     (os mesmos do Omie.Hub).
-  - Produto sem marca, ou de marca que não tem categoria na Tray, não entra.
+  - Categoria de produto novo: a mais usada pela mesma marca na Tray; se a marca
+    ainda não tem produtos na Tray (ou o produto não tem marca), vai para a
+    categoria padrão (CATEGORIA_PADRAO_ID, ou a categoria CATEGORIA_PADRAO_NOME,
+    criada na Tray se não existir) para ser reclassificado depois.
   - Produto do Omie que não existe na Tray: é criado na Tray.
   - Produto que já existe na Tray: só são preenchidos campos que estão vazios
     na Tray (referência, EAN, NCM, peso, medidas, marca). Nada que já tenha
-    valor é sobrescrito.
+    valor é sobrescrito. Exceção: o preço da Tray sempre segue o valor
+    unitário do Omie.
   - Imagens: produto criado, ou existente na Tray com ZERO imagens, recebe as
     fotos cadastradas no Omie. Produto que já tem alguma imagem nunca é tocado.
 
@@ -43,6 +47,7 @@ INTERVALO_SEG = int(os.environ.get("INTERVALO_SEG", "60"))
 JANELA_MIN = int(os.environ.get("JANELA_MIN", "10"))
 MAX_ESCRITAS = int(os.environ.get("MAX_ESCRITAS", "100000"))
 CATEGORIA_PADRAO = os.environ.get("CATEGORIA_PADRAO_ID", "")
+CATEGORIA_PADRAO_NOME = os.environ.get("CATEGORIA_PADRAO_NOME", "Novos produtos").strip()
 LIMITE_OMIE = int(os.environ.get("LIMITE_OMIE", "0"))
 # Local de estoque do Omie usado para o estoque na Tray ("Artigos - Loja").
 # O campo quantidade_estoque da listagem de produtos não serve: vem zerado.
@@ -136,10 +141,13 @@ class Tray:
     def buscar(self, campo, valor):
         if vazio(valor):
             return None
-        r = self.req("GET", "/products", {campo: valor, "limit": 5})
+        valor = str(valor).strip()
+        r = self.req("GET", "/products", {campo: valor, "limit": 50})
         if r.status_code != 200:
             raise RuntimeError(f"Tray: falha ao buscar {campo}={valor}: {r.status_code} {r.text[:200]}")
-        produtos = r.json().get("Products", [])
+        # o filtro da Tray pode trazer parecidos (ex.: 123 -> 1234); só vale igual
+        produtos = [x for x in r.json().get("Products", [])
+                    if str(x["Product"].get(campo) or "").strip() == valor]
         if len(produtos) > 1:
             log(f"atenção: {len(produtos)} produtos na Tray com {campo}={valor}; usando o primeiro ({produtos[0]['Product']['id']})")
         return produtos[0]["Product"] if produtos else None
@@ -152,6 +160,24 @@ class Tray:
         cats = Counter(x["Product"].get("category_id") for x in r.json().get("Products", [])
                        if x["Product"].get("category_id"))
         return cats.most_common(1)[0][0] if cats else None
+
+    def categoria_por_nome(self, nome):
+        """ID da categoria com esse nome; cria na Tray se não existir."""
+        r = self.req("GET", "/categories", {"name": nome, "limit": 50})
+        if r.status_code != 200:
+            raise RuntimeError(f"Tray: falha ao buscar categoria {nome}: {r.status_code} {r.text[:200]}")
+        for x in r.json().get("Categories", []):
+            if chave_marca(x["Category"].get("name")) == chave_marca(nome):
+                return x["Category"]["id"]
+        if DRY_RUN:
+            log(f"[simulação] criaria a categoria padrão '{nome}' na Tray")
+            return "(nova)"
+        self.escritas += 1
+        r = self.req("POST", "/categories", corpo={"Category": {"name": nome}})
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"Tray: falha ao criar categoria {nome}: {r.status_code} {r.text[:200]}")
+        log(f"categoria padrão '{nome}' criada na Tray (id {r.json().get('id')})")
+        return r.json().get("id")
 
     def listar_todos(self):
         pagina, todos = 1, []
@@ -272,6 +298,23 @@ def ficha_omie(p):
     }
 
 
+def preco_omie(p):
+    try:
+        return round(float(p.get("valor_unitario") or 0), 2)
+    except (TypeError, ValueError):
+        return 0
+
+
+def preco_a_corrigir(tray_prod, p):
+    """Preço do Omie, se for diferente do que está na Tray."""
+    preco = preco_omie(p)
+    try:
+        atual = round(float(tray_prod.get("price") or 0), 2)
+    except (TypeError, ValueError):
+        atual = 0
+    return preco if preco > 0 and abs(preco - atual) >= 0.01 else None
+
+
 def fotos_omie(p):
     """URLs das fotos do produto no Omie (a Tray aceita até 15)."""
     return [i["url_imagem"] for i in (p.get("imagens") or []) if i.get("url_imagem")][:15]
@@ -293,6 +336,7 @@ class Sincronizador:
         # processá-las, e nesse meio tempo o produto ainda aparece sem imagem
         self.fotos_enviadas = set()
         self.saldos = None  # modo completo: saldos do local carregados de uma vez
+        self.cat_padrao = CATEGORIA_PADRAO or None
 
     def preparar_categorias(self, produtos_tray):
         por_marca = defaultdict(Counter)
@@ -305,13 +349,34 @@ class Sincronizador:
         """Estoque do produto no local "Artigos - Loja" do Omie."""
         if self.saldos is not None:
             return self.saldos.get(p.get("codigo"), 0)
-        return self.saldo_produto(p["codigo_produto"])
+        return self.omie.saldo_produto(p["codigo_produto"])
 
     def categoria_para(self, marca):
         chave = chave_marca(marca)
         if chave and chave not in self.cat_por_marca and self.indice is None:
             self.cat_por_marca[chave] = self.tray.categoria_da_marca(marca)
-        return self.cat_por_marca.get(chave) or CATEGORIA_PADRAO
+        if self.cat_por_marca.get(chave):
+            return self.cat_por_marca[chave]
+        if not self.cat_padrao and CATEGORIA_PADRAO_NOME:
+            self.cat_padrao = self.tray.categoria_por_nome(CATEGORIA_PADRAO_NOME)
+        if self.cat_padrao:
+            self.cont["categoria_padrao"] += 1
+        return self.cat_padrao
+
+    def atualizar_existente(self, tray_prod, ficha, p):
+        """Preenche campos vazios e corrige o preço. Retorna True se gravou algo."""
+        novos = campos_a_preencher(tray_prod, ficha)
+        preco = preco_a_corrigir(tray_prod, p)
+        if preco is not None:
+            novos["price"] = preco
+        if not novos:
+            return False
+        detalhe = ", ".join(f"price {tray_prod.get('price')} -> {preco}" if c == "price" else c for c in novos)
+        self.escrever("PUT", f"/products/{tray_prod['id']}", novos,
+                      f"atualizar {tray_prod['id']} ({ficha['reference']}): {detalhe}",
+                      "preco_corrigido" if preco is not None else "preenchido")
+        tray_prod.update(novos)
+        return True
 
     def localizar(self, ficha):
         if self.indice is not None:
@@ -329,12 +394,8 @@ class Sincronizador:
         tray_prod = self.localizar(ficha)
 
         if tray_prod:
-            novos = campos_a_preencher(tray_prod, ficha)
             precisa_fotos = not (tray_prod.get("ProductImage") or []) and bool(fotos_omie(p))
-            if novos:
-                self.escrever("PUT", f"/products/{tray_prod['id']}", novos,
-                              f"preencher {tray_prod['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
-            elif not precisa_fotos:
+            if not self.atualizar_existente(tray_prod, ficha, p) and not precisa_fotos:
                 self.cont["sem_mudanca"] += 1
             if precisa_fotos:
                 self.enviar_fotos(tray_prod["id"], p, tray_prod)
@@ -347,10 +408,7 @@ class Sincronizador:
             if existente:
                 self.indice["ref"][ficha["reference"]] = existente
                 self.cont["achado_na_confirmacao"] += 1
-                novos = campos_a_preencher(existente, ficha)
-                if novos:
-                    self.escrever("PUT", f"/products/{existente['id']}", novos,
-                                  f"preencher {existente['id']} ({ficha['reference']}): {', '.join(novos)}", "preenchido")
+                self.atualizar_existente(existente, ficha, p)
                 self.enviar_fotos(existente["id"], p, existente)
                 return
 
@@ -363,7 +421,7 @@ class Sincronizador:
         corpo = {k: v for k, v in ficha.items() if not vazio(v)}
         corpo.update({
             "name": html.unescape(p.get("descricao") or "").strip()[:200],
-            "price": p.get("valor_unitario") or 0,
+            "price": preco_omie(p),
             "stock": self.estoque_de(p),
             "category_id": categoria,
             "available": 1,
