@@ -9,10 +9,15 @@ Regras:
     categoria padrão (CATEGORIA_PADRAO_ID, ou a categoria CATEGORIA_PADRAO_NOME,
     criada na Tray se não existir) para ser reclassificado depois.
   - Produto do Omie que não existe na Tray: é criado na Tray.
-  - Produto que já existe na Tray: só são preenchidos campos que estão vazios
-    na Tray (referência, EAN, NCM, peso, medidas, marca). Nada que já tenha
-    valor é sobrescrito. Exceção: o preço da Tray sempre segue o valor
-    unitário do Omie.
+  - Produto que já existe na Tray: é atualizado com os dados do Omie sempre
+    que forem diferentes (referência, EAN, NCM, peso, medidas, marca, preço e
+    estoque). Campo vazio no Omie não apaga o que está na Tray. Nome,
+    categoria e imagens da Tray não são alterados.
+  - Estoque = saldo do local "Artigos - Loja" do Omie. Movimentar estoque não
+    altera o cadastro do produto, então o modo incremental relê os saldos do
+    local a cada ESTOQUE_MIN minutos e atualiza na Tray os que mudaram desde a
+    última leitura (guardada em SALDOS_ARQUIVO entre execuções). O completo
+    diário confere o estoque de todos.
   - Imagens: produto criado, ou existente na Tray com ZERO imagens, recebe as
     fotos cadastradas no Omie. Produto que já tem alguma imagem nunca é tocado.
 
@@ -52,6 +57,10 @@ LIMITE_OMIE = int(os.environ.get("LIMITE_OMIE", "0"))
 # Local de estoque do Omie usado para o estoque na Tray ("Artigos - Loja").
 # O campo quantidade_estoque da listagem de produtos não serve: vem zerado.
 LOCAL_ESTOQUE = int(os.environ.get("LOCAL_ESTOQUE_OMIE", "2423153066"))  # 0 = sem limite (útil para testes)
+
+# Releitura dos saldos do local no modo incremental (leva alguns minutos).
+ESTOQUE_MIN = int(os.environ.get("ESTOQUE_MIN", "15"))
+SALDOS_ARQUIVO = os.environ.get("SALDOS_ARQUIVO", "saldos-omie.json")
 
 BRT = timezone(timedelta(hours=-3))
 
@@ -320,9 +329,43 @@ def fotos_omie(p):
     return [i["url_imagem"] for i in (p.get("imagens") or []) if i.get("url_imagem")][:15]
 
 
-def campos_a_preencher(tray_prod, ficha):
-    """Só campos vazios na Tray que o Omie tem preenchidos."""
-    return {c: v for c, v in ficha.items() if vazio(tray_prod.get(c)) and not vazio(v)}
+def mesmo_valor(campo, tray_valor, omie_valor):
+    if campo == "ncm":
+        return ncm_tray(tray_valor) == omie_valor
+    if campo == "brand":
+        return chave_marca(tray_valor) == chave_marca(omie_valor)
+    try:
+        return abs(float(str(tray_valor).replace(",", ".")) - float(str(omie_valor).replace(",", "."))) < 0.001
+    except (TypeError, ValueError):
+        return str(tray_valor or "").strip() == str(omie_valor or "").strip()
+
+
+def campos_diferentes(tray_prod, ficha):
+    """Campos que o Omie tem preenchidos e estão diferentes na Tray."""
+    return {c: v for c, v in ficha.items()
+            if not vazio(v) and (vazio(tray_prod.get(c)) or not mesmo_valor(c, tray_prod.get(c), v))}
+
+
+def estoque_tray(tray_prod):
+    try:
+        return int(float(tray_prod.get("stock") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+def carregar_saldos():
+    try:
+        with open(SALDOS_ARQUIVO) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def salvar_saldos(saldos):
+    if DRY_RUN or saldos is None:
+        return
+    with open(SALDOS_ARQUIVO, "w") as f:
+        json.dump(saldos, f)
 
 
 class Sincronizador:
@@ -364,19 +407,47 @@ class Sincronizador:
         return self.cat_padrao
 
     def atualizar_existente(self, tray_prod, ficha, p):
-        """Preenche campos vazios e corrige o preço. Retorna True se gravou algo."""
-        novos = campos_a_preencher(tray_prod, ficha)
+        """Atualiza na Tray o que estiver diferente do Omie. Retorna True se gravou algo."""
+        novos = campos_diferentes(tray_prod, ficha)
         preco = preco_a_corrigir(tray_prod, p)
         if preco is not None:
             novos["price"] = preco
+        estoque = self.estoque_de(p)
+        if estoque != estoque_tray(tray_prod):
+            novos["stock"] = estoque
         if not novos:
             return False
-        detalhe = ", ".join(f"price {tray_prod.get('price')} -> {preco}" if c == "price" else c for c in novos)
+        detalhe = ", ".join(f"{c} {tray_prod.get(c)} -> {v}" for c, v in novos.items())
         self.escrever("PUT", f"/products/{tray_prod['id']}", novos,
-                      f"atualizar {tray_prod['id']} ({ficha['reference']}): {detalhe}",
-                      "preco_corrigido" if preco is not None else "preenchido")
+                      f"atualizar {tray_prod['id']} ({ficha['reference']}): {detalhe}", "atualizado")
         tray_prod.update(novos)
         return True
+
+    def atualizar_estoque(self, codigo, saldo):
+        """Estoque de um produto cujo saldo mudou no Omie. Retorna False se falhou."""
+        tray_prod = self.tray.buscar("reference", codigo)
+        if not tray_prod:
+            return True  # não está na Tray: será criado quando o cadastro for sincronizado
+        if estoque_tray(tray_prod) == saldo:
+            self.cont["estoque_ok"] += 1
+            return True
+        return bool(self.escrever("PUT", f"/products/{tray_prod['id']}", {"stock": saldo},
+                                  f"estoque {tray_prod['id']} ({codigo}): {tray_prod.get('stock')} -> {saldo}",
+                                  "estoque_atualizado"))
+
+    def sincronizar_estoques(self, anteriores):
+        """Relê os saldos do local e atualiza na Tray os que mudaram. Retorna a nova leitura."""
+        log("Lendo saldos do local de estoque do Omie…")
+        atuais = self.omie.saldos_local()
+        if anteriores is None:
+            log(f"{len(atuais)} saldos lidos; sem leitura anterior para comparar (o completo diário confere todos)")
+            return atuais
+        mudaram = {c: v for c, v in atuais.items() if anteriores.get(c, 0) != v}
+        log(f"{len(mudaram)} saldos mudaram no local {LOCAL_ESTOQUE}")
+        for codigo, saldo in mudaram.items():
+            if not self.atualizar_estoque(codigo, saldo):
+                atuais[codigo] = anteriores.get(codigo, 0)  # tenta de novo na próxima leitura
+        return atuais
 
     def localizar(self, ficha):
         if self.indice is not None:
@@ -476,7 +547,7 @@ class Sincronizador:
                 self.indice["ref"][campos["reference"]] = novo
                 if campos.get("ean"):
                     self.indice["ean"][campos["ean"]] = novo
-            return novo_id
+            return novo_id or True
         else:
             self.cont["erro"] += 1
             log(f"ERRO {descricao}: {r.status_code} {r.text[:300]}")
@@ -502,11 +573,17 @@ class Sincronizador:
                 log(f"{n} produtos do Omie processados — {dict(self.cont)}")
             if LIMITE_OMIE and n >= LIMITE_OMIE:
                 break
+        salvar_saldos(self.saldos)
 
     def rodar_incremental(self):
         inicio_job = time.time()
         desde = datetime.now(BRT) - timedelta(minutes=JANELA_MIN)
+        saldos, proxima_leitura = carregar_saldos(), 0.0
         while True:
+            if ESTOQUE_MIN and time.time() >= proxima_leitura:
+                proxima_leitura = time.time() + ESTOQUE_MIN * 60
+                saldos = self.sincronizar_estoques(saldos)
+                salvar_saldos(saldos)
             ciclo = datetime.now(BRT)
             vistos = 0
             for p in self.omie.produtos(desde=desde):
