@@ -71,6 +71,15 @@ jobs:
             echo "modo=incremental" >> "$GITHUB_OUTPUT"
           fi
 
+      # Última leitura dos saldos do local "Artigos - Loja": o incremental compara
+      # com ela para saber quais estoques mudaram desde a execução anterior.
+      - name: Restaurar última leitura de estoque
+        uses: actions/cache/restore@v4
+        with:
+          path: saldos-omie.json
+          key: saldos-${{ github.run_id }}
+          restore-keys: saldos-
+
       - name: Sincronizar
         env:
           CONSUMER_KEY: ${{ secrets.CONSUMER_KEY }}
@@ -85,6 +94,13 @@ jobs:
           INTERVALO_SEG: "60"
           JANELA_MIN: "10"
         run: python sincroniza_produtos.py
+
+      - name: Guardar leitura de estoque
+        if: always() && !cancelled() && inputs.dry_run != true && hashFiles('saldos-omie.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: saldos-omie.json
+          key: saldos-${{ github.run_id }}
 
       - name: Marcar completo de hoje como feito
         if: (github.event_name == 'schedule' || inputs.modo == 'auto') && steps.modo.outputs.modo == 'completo' && success()
